@@ -11,7 +11,7 @@ except ImportError:
     AXONN_AVAILABLE=False
 
 #PCA_DATA_PATH = "/global/cfs/cdirs/m4641/ApproxAttn/"
-PCA_DATA_PATH = "/pscratch/sd/p/prajwal/InferenceData"
+PCA_DATA_PATH = os.getenv("PCA_DATA_PATH", "/pscratch/sd/p/prajwal/InferenceData")
 
 def get_pca_components(args, layer_idx, head_dim, top_r, num_key_value_groups, repeat_kv, device = None):
     print (f"Fetching PCA Components - {args.model_id}")
