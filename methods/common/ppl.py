@@ -4,6 +4,7 @@ from tqdm import tqdm
 from datasets import load_dataset, load_from_disk
 import copy
 from datasets import Dataset, DatasetDict
+import os
 
 
 try:
@@ -102,10 +103,14 @@ def evaluate_ppl(model_id="facebook/opt-350m",
 
     nlls = []
     prev_end_loc = 0
+    max_chunks = int(os.getenv("LOKI_MAX_CHUNKS", "0"))
 
     model = model.to(device)
 
-    for begin_loc in tqdm(range(0, seq_len, stride)):
+    for chunk_idx, begin_loc in enumerate(tqdm(range(0, seq_len, stride))):
+        if max_chunks > 0 and chunk_idx >= max_chunks:
+            print(f"Stopping after {max_chunks} chunks because LOKI_MAX_CHUNKS is set")
+            break
         end_loc = min(begin_loc + max_length, seq_len)
         trg_len = end_loc - prev_end_loc  # may be different from stride on last loop
         input_ids = encodings.input_ids[:, begin_loc:end_loc].to(device)

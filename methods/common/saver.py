@@ -12,7 +12,7 @@ CATEGORY_TO_BASEFILE = {
 SAVE_TENSORS = {
     "key" : True,
     "query" : True,
-    "value" : True,
+    "value" : os.getenv("LOKI_SAVE_VALUE_TENSORS", "0") == "1",
 }
 
 class TensorSaver:
