@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from functools import partial
 
 from .utils import mask_attn_pca_topk, get_pca_components
+from .crosscov_utils import mask_attn_crosscov, get_crosscov_components
 import methods
 
 try:
@@ -37,8 +38,15 @@ def get_pca_forward(args):
                 "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
             )
 
-        if not hasattr(self, "pca_components"):
-            self.pca_means, self.pca_components, self.pca_components_r_key = get_pca_components(args, self.layer_idx, self.head_dim, args.top_r, self.num_key_value_groups, repeat_kv)
+        use_crosscov = getattr(args, "use_crosscov", False)
+        if use_crosscov:
+            if not hasattr(self, "cc_key_r"):
+                (self.cc_key_full, self.cc_key_r,
+                 self.cc_query_full, self.cc_query_r) = get_crosscov_components(
+                    args, self.layer_idx, self.head_dim, args.top_r, self.num_key_value_groups, repeat_kv)
+        else:
+            if not hasattr(self, "pca_components"):
+                self.pca_means, self.pca_components, self.pca_components_r_key = get_pca_components(args, self.layer_idx, self.head_dim, args.top_r, self.num_key_value_groups, repeat_kv)
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -69,34 +77,53 @@ def get_pca_forward(args):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        self.pca_means = self.pca_means.to(key_states.dtype)
-        self.pca_components_r_key = self.pca_components_r_key.to(key_states.dtype)
-        self.pca_components = self.pca_components.to(key_states.dtype)
-
-
-        key_states_pca  = torch.matmul(key_states, self.pca_components)
-        query_states_pca = torch.matmul(query_states, self.pca_components)
-        attn_weights = (torch.matmul(query_states_pca, key_states_pca.transpose(2, 3))) / math.sqrt(self.head_dim)
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-
-            attn_weights = attn_weights + attention_mask
-
         if args.top_k <= 1:
-            topk = int(args.top_k * attn_weights.shape[-1])
+            topk = int(args.top_k * key_states.shape[-2])
         else:
             topk = int(args.top_k)
-        attn_weights, alpha = mask_attn_pca_topk(args, self.layer_idx, attn_weights, attention_mask, query_states, key_states, self.pca_components, self.pca_components_r_key, args.top_r, topk)
+
+        if use_crosscov:
+            self.cc_key_r = self.cc_key_r.to(key_states.dtype)
+            self.cc_query_r = self.cc_query_r.to(key_states.dtype)
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+                raise ValueError(
+                    f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                    f" {attn_weights.size()}"
+                )
+            if attention_mask is not None:
+                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                    raise ValueError(
+                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    )
+                attn_weights = attn_weights + attention_mask
+            attn_weights, alpha = mask_attn_crosscov(
+                args, self.layer_idx, attn_weights, attention_mask, query_states, key_states,
+                self.cc_key_r, self.cc_query_r, args.top_r, topk)
+        else:
+            self.pca_means = self.pca_means.to(key_states.dtype)
+            self.pca_components_r_key = self.pca_components_r_key.to(key_states.dtype)
+            self.pca_components = self.pca_components.to(key_states.dtype)
+
+            key_states_pca  = torch.matmul(key_states, self.pca_components)
+            query_states_pca = torch.matmul(query_states, self.pca_components)
+            attn_weights = (torch.matmul(query_states_pca, key_states_pca.transpose(2, 3))) / math.sqrt(self.head_dim)
+
+            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+                raise ValueError(
+                    f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                    f" {attn_weights.size()}"
+                )
+
+            if attention_mask is not None:
+                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                    raise ValueError(
+                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    )
+
+                attn_weights = attn_weights + attention_mask
+
+            attn_weights, alpha = mask_attn_pca_topk(args, self.layer_idx, attn_weights, attention_mask, query_states, key_states, self.pca_components, self.pca_components_r_key, args.top_r, topk)
 
         assert alpha is not None, "alpha is None"
 
