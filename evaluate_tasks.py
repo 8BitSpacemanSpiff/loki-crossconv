@@ -33,6 +33,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-wandb", action='store_true', default=False, help="use wandb")
     parser.add_argument("--use-crosscov", action="store_true", default=False, help="use CrossCov-SVD bases with PCA TopK attention")
     parser.add_argument("--log-recall", action="store_true", default=False, help="log recall@k for CrossCov sparse selection")
+    parser.add_argument("--log-output-error", action="store_true", default=False, help="log attention-output error against full attention")
 
     # Get Method Specific Arguments
     parser = get_h2o_args(parser)

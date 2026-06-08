@@ -22,6 +22,18 @@ try:
 except ImportError:
     AXONN_AVAILABLE=False
 
+def log_attention_output_error(args, layer_idx, dense_output, sparse_output):
+    diff = (sparse_output.float() - dense_output.float()).reshape(dense_output.shape[0], -1)
+    ref = dense_output.float().reshape(dense_output.shape[0], -1)
+    rel_l2 = (torch.linalg.vector_norm(diff, dim=-1) / torch.linalg.vector_norm(ref, dim=-1).clamp_min(1e-12)).mean().item()
+    cosine = F.cosine_similarity(sparse_output.float().reshape(dense_output.shape[0], -1), ref, dim=-1).mean().item()
+    print(f"LayerId:{layer_idx}|AttnOutRelL2:{rel_l2:.6f}|AttnOutCos:{cosine:.6f}")
+    if methods.LOGGER is not None:
+        methods.LOGGER.log({
+            f"attn_out_rel_l2_layer_{layer_idx}": rel_l2,
+            f"attn_out_cos_layer_{layer_idx}": cosine,
+        })
+
 def get_pca_forward(args):
     def modified_forward(
         self,
@@ -82,6 +94,14 @@ def get_pca_forward(args):
         else:
             topk = int(args.top_k)
 
+        dense_attn_output = None
+        if getattr(args, "log_output_error", False):
+            dense_attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            if attention_mask is not None:
+                dense_attn_weights = dense_attn_weights + attention_mask
+            dense_attn_weights = nn.functional.softmax(dense_attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            dense_attn_output = torch.matmul(dense_attn_weights, value_states)
+
         if use_crosscov:
             self.cc_key_r = self.cc_key_r.to(key_states.dtype)
             self.cc_query_r = self.cc_query_r.to(key_states.dtype)
@@ -131,6 +151,9 @@ def get_pca_forward(args):
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
+
+        if dense_attn_output is not None:
+            log_attention_output_error(args, self.layer_idx, dense_attn_output, attn_output)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
