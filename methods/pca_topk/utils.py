@@ -118,6 +118,14 @@ def mask_attn_pca_topk(args, layer_idx, attn_weights, attention_mask, query_stat
     # Get top-k keys based on the s_hat_recent score matrix
     i2 = torch.topk(attn_weights_s_hat, top_k, dim=-1).indices
 
+    if getattr(args, "log_mass_recall", False):
+        true_probs = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        mass = torch.gather(true_probs, -1, i2).sum(-1)
+        mass = mass[:, :, top_k:].mean().item()
+        print(f"LayerId:{layer_idx}|MassRecall@{top_k}:{mass:.4f}")
+        if methods.LOGGER is not None:
+            methods.LOGGER.log({f"mass_recall_layer_{layer_idx}": mass})
+
 
     # Computing Jaccard Similarity between original and approxiamte scores for top-k key set
     ## Get top-k keys based on the exact attention weights

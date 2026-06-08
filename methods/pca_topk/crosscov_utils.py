@@ -79,6 +79,14 @@ def mask_attn_crosscov(args, layer_idx, attn_weights, attention_mask, query_stat
         if methods.LOGGER is not None:
             methods.LOGGER.log({f"recall_layer_{layer_idx}": recall})
 
+    if getattr(args, "log_mass_recall", False):
+        true_probs = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
+        mass = torch.gather(true_probs, -1, i2).sum(-1)
+        mass = mass[:, :, top_k:].mean().item()
+        print(f"LayerId:{layer_idx}|MassRecall@{top_k}:{mass:.4f}")
+        if methods.LOGGER is not None:
+            methods.LOGGER.log({f"mass_recall_layer_{layer_idx}": mass})
+
     mask = torch.full_like(attn_weights, fill_value=float("-inf"))
     mask.scatter_(-1, i2, attn_weights.gather(-1, i2))
     alpha = torch.sum(torch.gather(torch.softmax(s_hat, dim=-1), -1, i2), -1, True)

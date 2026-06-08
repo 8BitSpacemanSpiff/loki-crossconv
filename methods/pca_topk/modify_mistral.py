@@ -125,9 +125,7 @@ def get_pca_forward(args):
             self.pca_components_r_key = self.pca_components_r_key.to(key_states.dtype)
             self.pca_components = self.pca_components.to(key_states.dtype)
 
-            key_states_pca  = torch.matmul(key_states, self.pca_components)
-            query_states_pca = torch.matmul(query_states, self.pca_components)
-            attn_weights = (torch.matmul(query_states_pca, key_states_pca.transpose(2, 3))) / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
             if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
                 raise ValueError(

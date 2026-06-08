@@ -34,6 +34,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-crosscov", action="store_true", default=False, help="use CrossCov-SVD bases with PCA TopK attention")
     parser.add_argument("--log-recall", action="store_true", default=False, help="log recall@k for CrossCov sparse selection")
     parser.add_argument("--log-output-error", action="store_true", default=False, help="log attention-output error against full attention")
+    parser.add_argument("--log-mass-recall", action="store_true", default=False, help="log true attention mass recovered by selected tokens")
 
     # Get Method Specific Arguments
     parser = get_h2o_args(parser)
