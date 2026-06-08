@@ -73,7 +73,7 @@ def topk_indices(scores, k):
     return torch.topk(scores, k, dim=-1).indices
 
 
-def recall_for_sequence(K, Q, key_cols, query_cols, top_k_frac):
+def recall_for_sequence(K, Q, key_cols, query_cols, top_k_frac, runtime_fixed_k=False):
     # K, Q : (num_heads, seq, head_dim) post-rotary, one sequence.
     # key_cols/query_cols : (num_heads, head_dim, top_r) projection columns.
     H, S, d = K.shape
@@ -91,10 +91,15 @@ def recall_for_sequence(K, Q, key_cols, query_cols, top_k_frac):
     approx = torch.matmul(Qr, Kr.transpose(-1, -2)) / scale + causal
 
     recalls = []
+    fixed_k = int(top_k_frac * S) if top_k_frac <= 1 else int(top_k_frac)
+    fixed_k = max(1, min(fixed_k, S))
     for m in range(S):
         valid = m + 1                      # causal: positions 0..m are visible
-        k = int(top_k_frac * valid) if top_k_frac <= 1 else int(top_k_frac)
-        k = max(1, min(k, valid))
+        if runtime_fixed_k:
+            k = fixed_k
+        else:
+            k = int(top_k_frac * valid) if top_k_frac <= 1 else int(top_k_frac)
+            k = max(1, min(k, valid))
         if valid < 2 or k >= valid:
             continue                       # nothing to select among / trivial
         g = torch.topk(exact[:, m, :valid], k, dim=-1).indices    # (H, k)
@@ -120,6 +125,9 @@ def main():
     ap.add_argument("--method", choices=["loki", "crosscov"], default="crosscov")
     ap.add_argument("--max-seqs", type=int, default=64, help="cap sequences per layer for speed")
     ap.add_argument("--device", default="cpu", help="device for recall matmuls, e.g. cpu or cuda")
+    ap.add_argument("--runtime-fixed-k", action="store_true",
+                    help="match runtime maskers: use k=int(top_k * full sequence length) for all positions")
+    ap.add_argument("--per-layer", action="store_true", help="print per-layer recall as well as overall recall")
     args = ap.parse_args()
 
     if args.method == "crosscov" and args.query_basis is None:
@@ -154,11 +162,14 @@ def main():
             n_seq = min(args.max_seqs, K_flat.shape[0])
             seq_recalls = []
             for s in range(n_seq):
-                r = recall_for_sequence(K_flat[s], Q_flat[s], key_cols, query_cols, args.top_k)
+                r = recall_for_sequence(K_flat[s], Q_flat[s], key_cols, query_cols, args.top_k, args.runtime_fixed_k)
                 if r == r:  # not nan
                     seq_recalls.append(r)
             if seq_recalls:
-                per_layer.append(sum(seq_recalls) / len(seq_recalls))
+                layer_recall = sum(seq_recalls) / len(seq_recalls)
+                per_layer.append(layer_recall)
+                if args.per_layer:
+                    print(f"  layer {layer_id:>2}: {layer_recall:.4f}")
         overall = sum(per_layer) / len(per_layer) if per_layer else float("nan")
         print(f"{top_r:>6} | {overall:>9.4f}")
 
