@@ -65,7 +65,7 @@ def get_model(
             if rank == 0:
                 print("Parallelized with the slower auto parallelize API.")
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, force_download=True, trust_remote_code=True).to(device)
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, trust_remote_code=True).to(device)
 
     return model
 
