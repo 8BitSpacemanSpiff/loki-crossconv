@@ -67,10 +67,10 @@ def recall_for_sequence(K, Q, key_cols, query_cols, top_k_frac):
     # K, Q : (num_heads, seq, head_dim) post-rotary, one sequence.
     # key_cols/query_cols : (num_heads, head_dim, top_r) projection columns.
     H, S, d = K.shape
-    device = K.dtype
+    device = K.device
     scale = d ** 0.5
 
-    causal = torch.triu(torch.full((S, S), NEG_INF), diagonal=1).unsqueeze(0)  # (1,S,S)
+    causal = torch.triu(torch.full((S, S), NEG_INF, device=device), diagonal=1).unsqueeze(0)  # (1,S,S)
 
     # Exact scores -> exact top-k (the ground truth).
     exact = torch.matmul(Q, K.transpose(-1, -2)) / scale + causal
@@ -90,8 +90,8 @@ def recall_for_sequence(K, Q, key_cols, query_cols, top_k_frac):
         g = torch.topk(exact[:, m, :valid], k, dim=-1).indices    # (H, k)
         a = torch.topk(approx[:, m, :valid], k, dim=-1).indices   # (H, k)
         # recall@k per head = |a ∩ g| / k
-        gset = torch.zeros(H, valid, dtype=torch.bool)
-        aset = torch.zeros(H, valid, dtype=torch.bool)
+        gset = torch.zeros(H, valid, dtype=torch.bool, device=device)
+        aset = torch.zeros(H, valid, dtype=torch.bool, device=device)
         gset.scatter_(-1, g, True)
         aset.scatter_(-1, a, True)
         inter = (gset & aset).sum(-1).float()
@@ -109,6 +109,7 @@ def main():
     ap.add_argument("--top-k", type=float, default=0.125)
     ap.add_argument("--method", choices=["loki", "crosscov"], default="crosscov")
     ap.add_argument("--max-seqs", type=int, default=64, help="cap sequences per layer for speed")
+    ap.add_argument("--device", default="cpu", help="device for recall matmuls, e.g. cpu or cuda")
     args = ap.parse_args()
 
     if args.method == "crosscov" and args.query_basis is None:
@@ -125,17 +126,17 @@ def main():
             if K_all is None or Q_all is None:
                 continue
             kc_file = f"{args.key_basis}/pca_components/pca_components_layer_{layer_id}.pt"
-            key_cols = to_columns(torch.load(kc_file, map_location="cpu").float(), top_r)
+            key_cols = to_columns(torch.load(kc_file, map_location="cpu").float(), top_r).to(args.device)
             if args.method == "loki":
                 query_cols = key_cols                      # shared basis
             else:
                 qc_file = f"{args.query_basis}/pca_components/pca_components_layer_{layer_id}.pt"
-                query_cols = to_columns(torch.load(qc_file, map_location="cpu").float(), top_r)
+                query_cols = to_columns(torch.load(qc_file, map_location="cpu").float(), top_r).to(args.device)
 
             # Flatten (num_files, batch, ...) -> a list of sequences.
             nf, b, H, seq, d = K_all.shape
-            K_flat = K_all.reshape(nf * b, H, seq, d).float()
-            Q_flat = Q_all.reshape(nf * b, H, seq, d).float()
+            K_flat = K_all.reshape(nf * b, H, seq, d).float().to(args.device)
+            Q_flat = Q_all.reshape(nf * b, H, seq, d).float().to(args.device)
             n_seq = min(args.max_seqs, K_flat.shape[0])
             seq_recalls = []
             for s in range(n_seq):

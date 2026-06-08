@@ -87,8 +87,8 @@ def crosscov_basis(K, Q, whiten):
         Rq_ih = inv_sqrt_psd(Rq)
         C_in = Rk_ih @ C @ Rq_ih
     else:
-        Rk_ih = torch.eye(d, dtype=C.dtype)
-        Rq_ih = torch.eye(d, dtype=C.dtype)
+        Rk_ih = torch.eye(d, dtype=C.dtype, device=C.device)
+        Rq_ih = torch.eye(d, dtype=C.dtype, device=C.device)
         C_in = C
 
     U, S, Vh = torch.linalg.svd(C_in)                     # C_in = U diag(S) Vh
@@ -113,13 +113,16 @@ def save_layer(out_side_dir, layer_id, comps, means, explained):
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten]")
+        print("Usage: python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten] [--device cpu|cuda]")
         sys.exit(1)
     num_layers = int(sys.argv[1])
     tensor_root = sys.argv[2]
     output_dir = sys.argv[3]
     whiten = "--whiten" in sys.argv[4:]
-    print(f"CrossCov-SVD | layers={num_layers} | whiten={whiten}")
+    device = "cpu"
+    if "--device" in sys.argv[4:]:
+        device = sys.argv[sys.argv.index("--device") + 1]
+    print(f"CrossCov-SVD | layers={num_layers} | whiten={whiten} | device={device}")
     print(f"  tensors: {tensor_root}/key , {tensor_root}/query")
     print(f"  output:  {output_dir}/key , {output_dir}/query")
 
@@ -130,8 +133,8 @@ def main():
             print(f"[skip] layer {layer_id}: missing tensors")
             continue
         # Drop the trailing (possibly partial) batch, matching pca.py.
-        K_all = torch.stack(kt[:-1], dim=0)
-        Q_all = torch.stack(qt[:-1], dim=0)
+        K_all = torch.stack(kt[:-1], dim=0).to(device)
+        Q_all = torch.stack(qt[:-1], dim=0).to(device)
         assert K_all.shape == Q_all.shape, f"key/query shape mismatch: {K_all.shape} vs {Q_all.shape}"
         num_heads = K_all.shape[-3]
         d = K_all.shape[-1]
