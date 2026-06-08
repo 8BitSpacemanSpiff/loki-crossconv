@@ -16,11 +16,13 @@
 # Loki's PCA basis. recall_eval.py / a unit test should confirm this.
 #
 # Usage:
-#   python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten]
+#   python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten] [--pool-gqa]
 #     tensor_root : directory holding 'key/' and 'query/' subfolders of saved
 #                   tensors (the {rotary_type} level produced by --save-tensors).
 #     output_dir  : where to write 'key/' and 'query/' basis subtrees.
 #     --whiten    : use the exact Eckart-Young version, SVD of Rk^{-1/2} C Rq^{-1/2}.
+#     --pool-gqa  : for GQA/MQA, write one deployable shared U basis per KV head by
+#                   pooling query-head cross-covariance energy within each KV group.
 
 import glob
 import os
@@ -115,6 +117,36 @@ def crosscov_basis(K, Q, whiten):
     return key_rows, query_rows, explained
 
 
+def pooled_gqa_u_basis(K_all, Q_all, kv_head):
+    # Deployable GQA variant: one shared key/query basis per KV head. For a KV
+    # group, pool the key-side cross-covariance energy across all query heads:
+    #     A = sum_g C_g C_g^T, C_g = E[k q_g^T]
+    # and keep the leading eigenvectors of A. This avoids per-query-head bases.
+    k_heads = K_all.shape[-3]
+    q_heads = Q_all.shape[-3]
+    if q_heads % k_heads != 0:
+        raise ValueError(f"cannot pool {q_heads} query heads over {k_heads} key heads")
+
+    group = q_heads // k_heads
+    K = head_matrix(K_all, kv_head)
+    N, d = K.shape
+    A = torch.zeros(d, d, dtype=torch.float64, device=K.device)
+
+    for offset in range(group):
+        q_head = kv_head * group + offset
+        Q = head_matrix(Q_all, q_head)
+        C = (K.transpose(0, 1) @ Q) / N
+        A = A + C @ C.transpose(0, 1)
+
+    evals, evecs = torch.linalg.eigh(A)
+    order = torch.argsort(evals, descending=True)
+    evals = torch.clamp(evals[order], min=0)
+    evecs = evecs[:, order]
+    rows = evecs.transpose(0, 1).contiguous()
+    explained = evals / evals.sum().clamp_min(EPS)
+    return rows, explained
+
+
 def save_layer(out_side_dir, layer_id, comps, means, explained):
     os.makedirs(f"{out_side_dir}/pca_components", exist_ok=True)
     os.makedirs(f"{out_side_dir}/pca_means", exist_ok=True)
@@ -126,16 +158,20 @@ def save_layer(out_side_dir, layer_id, comps, means, explained):
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten] [--device cpu|cuda]")
+        print("Usage: python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten] [--pool-gqa] [--device cpu|cuda]")
         sys.exit(1)
     num_layers = int(sys.argv[1])
     tensor_root = sys.argv[2]
     output_dir = sys.argv[3]
     whiten = "--whiten" in sys.argv[4:]
+    pool_gqa = "--pool-gqa" in sys.argv[4:]
+    if pool_gqa and whiten:
+        print("[ERROR] --pool-gqa currently supports the raw CrossCov-U shared basis only, not --whiten")
+        sys.exit(1)
     device = "cpu"
     if "--device" in sys.argv[4:]:
         device = sys.argv[sys.argv.index("--device") + 1]
-    print(f"CrossCov-SVD | layers={num_layers} | whiten={whiten} | device={device}")
+    print(f"CrossCov-SVD | layers={num_layers} | whiten={whiten} | pool_gqa={pool_gqa} | device={device}")
     print(f"  tensors: {tensor_root}/key , {tensor_root}/query")
     print(f"  output:  {output_dir}/key , {output_dir}/query")
 
@@ -148,8 +184,9 @@ def main():
         # Drop the trailing (possibly partial) batch, matching pca.py.
         K_all = torch.stack(kt[:-1], dim=0).to(device)
         Q_all = torch.stack(qt[:-1], dim=0).to(device)
-        K_all = repeat_kv_to_query_heads(K_all, Q_all)
-        assert K_all.shape == Q_all.shape, f"key/query shape mismatch: {K_all.shape} vs {Q_all.shape}"
+        if not pool_gqa:
+            K_all = repeat_kv_to_query_heads(K_all, Q_all)
+            assert K_all.shape == Q_all.shape, f"key/query shape mismatch: {K_all.shape} vs {Q_all.shape}"
         num_heads = K_all.shape[-3]
         d = K_all.shape[-1]
 
@@ -159,12 +196,16 @@ def main():
         query_expl = torch.zeros(num_heads, d)
 
         for h in range(num_heads):
-            K = head_matrix(K_all, h)
-            Q = head_matrix(Q_all, h)
-            kr, qr, expl = crosscov_basis(K, Q, whiten)
-            key_comps[h], query_comps[h] = kr, qr
-            key_expl[h] = expl
-            query_expl[h] = expl  # same singular spectrum drives both sides
+            if pool_gqa:
+                kr, expl = pooled_gqa_u_basis(K_all, Q_all, h)
+                qr = kr
+            else:
+                K = head_matrix(K_all, h)
+                Q = head_matrix(Q_all, h)
+                kr, qr, expl = crosscov_basis(K, Q, whiten)
+            key_comps[h], query_comps[h] = kr.cpu(), qr.cpu()
+            key_expl[h] = expl.cpu()
+            query_expl[h] = expl.cpu()  # same singular spectrum drives both sides
 
         # Means are not subtracted at inference (Loki's forward projects raw states),
         # so we store zeros to keep the loader happy and the operator uncentered (= E[k q^T]).
