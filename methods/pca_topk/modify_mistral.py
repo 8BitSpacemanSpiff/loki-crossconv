@@ -27,7 +27,11 @@ def log_attention_output_error(args, layer_idx, dense_output, sparse_output):
     ref = dense_output.float().reshape(dense_output.shape[0], -1)
     rel_l2 = (torch.linalg.vector_norm(diff, dim=-1) / torch.linalg.vector_norm(ref, dim=-1).clamp_min(1e-12)).mean().item()
     cosine = F.cosine_similarity(sparse_output.float().reshape(dense_output.shape[0], -1), ref, dim=-1).mean().item()
-    print(f"LayerId:{layer_idx}|AttnOutRelL2:{rel_l2:.6f}|AttnOutCos:{cosine:.6f}")
+    if getattr(args, "quiet_diagnostics", False):
+        methods.record_diagnostic("attn_out_rel_l2", layer_idx, rel_l2)
+        methods.record_diagnostic("attn_out_cos", layer_idx, cosine)
+    else:
+        print(f"LayerId:{layer_idx}|AttnOutRelL2:{rel_l2:.6f}|AttnOutCos:{cosine:.6f}")
     if methods.LOGGER is not None:
         methods.LOGGER.log({
             f"attn_out_rel_l2_layer_{layer_idx}": rel_l2,

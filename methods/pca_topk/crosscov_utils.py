@@ -45,7 +45,8 @@ def get_crosscov_components(args, layer_idx, head_dim, top_r, num_key_value_grou
         device = "cuda"
     key_full, key_r, r = _load_side("key", args, layer_idx, head_dim, top_r, num_key_value_groups, repeat_kv, device)
     query_full, query_r, _ = _load_side("query", args, layer_idx, head_dim, top_r, num_key_value_groups, repeat_kv, device)
-    print(f"{layer_idx}: CrossCov key_r {tuple(key_r.shape)} query_r {tuple(query_r.shape)}  ratio {r/head_dim:.3f}")
+    if not getattr(args, "quiet_diagnostics", False):
+        print(f"{layer_idx}: CrossCov key_r {tuple(key_r.shape)} query_r {tuple(query_r.shape)}  ratio {r/head_dim:.3f}")
     if methods.LOGGER is not None:
         methods.LOGGER.log({"compression_ratio": r / head_dim})
     return key_full, key_r, query_full, query_r
@@ -83,7 +84,10 @@ def mask_attn_crosscov(args, layer_idx, attn_weights, attention_mask, query_stat
         true_probs = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
         mass = torch.gather(true_probs, -1, i2).sum(-1)
         mass = mass[:, :, top_k:].mean().item()
-        print(f"LayerId:{layer_idx}|MassRecall@{top_k}:{mass:.4f}")
+        if getattr(args, "quiet_diagnostics", False):
+            methods.record_diagnostic("mass_recall", layer_idx, mass)
+        else:
+            print(f"LayerId:{layer_idx}|MassRecall@{top_k}:{mass:.4f}")
         if methods.LOGGER is not None:
             methods.LOGGER.log({f"mass_recall_layer_{layer_idx}": mass})
 

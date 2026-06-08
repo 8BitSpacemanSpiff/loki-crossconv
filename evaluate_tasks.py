@@ -35,6 +35,7 @@ if __name__ == "__main__":
     parser.add_argument("--log-recall", action="store_true", default=False, help="log recall@k for CrossCov sparse selection")
     parser.add_argument("--log-output-error", action="store_true", default=False, help="log attention-output error against full attention")
     parser.add_argument("--log-mass-recall", action="store_true", default=False, help="log true attention mass recovered by selected tokens")
+    parser.add_argument("--quiet-diagnostics", action="store_true", default=False, help="aggregate diagnostic logs and print a compact summary")
 
     # Get Method Specific Arguments
     parser = get_h2o_args(parser)
@@ -113,6 +114,8 @@ if __name__ == "__main__":
                     axonn_low_level_api=use_axonn_low_level_api)
 
         print(ppl)
+        if args.quiet_diagnostics and hasattr(methods, "DIAGNOSTICS"):
+            methods.print_diagnostics_summary()
         if methods.LOGGER is not None:
             methods.LOGGER.log_ppl(ppl)
     

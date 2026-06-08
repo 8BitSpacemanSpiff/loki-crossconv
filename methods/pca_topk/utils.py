@@ -14,7 +14,8 @@ except ImportError:
 PCA_DATA_PATH = os.getenv("PCA_DATA_PATH", "/pscratch/sd/p/prajwal/InferenceData")
 
 def get_pca_components(args, layer_idx, head_dim, top_r, num_key_value_groups, repeat_kv, device = None):
-    print (f"Fetching PCA Components - {args.model_id}")
+    if not getattr(args, "quiet_diagnostics", False):
+        print (f"Fetching PCA Components - {args.model_id}")
     model_folder_name = args.model_id.split("/")[-1] + "-PCA"
     rotary_type = args.rotary_type
     transform_dataset = args.transform_dataset
@@ -61,9 +62,10 @@ def get_pca_components(args, layer_idx, head_dim, top_r, num_key_value_groups, r
         pca_components = repeat_kv(pca_components, num_key_value_groups)
 
 
-    print ("{}: PCA Components Shape: {}".format(layer_idx, pca_components_r_key.shape))
-    print ("{}: PCA Means Shape: {}".format(layer_idx, pca_means.shape))
-    print ("Compression Ratio: {}".format(top_correct_r / head_dim))
+    if not getattr(args, "quiet_diagnostics", False):
+        print ("{}: PCA Components Shape: {}".format(layer_idx, pca_components_r_key.shape))
+        print ("{}: PCA Means Shape: {}".format(layer_idx, pca_means.shape))
+        print ("Compression Ratio: {}".format(top_correct_r / head_dim))
 
     if methods.LOGGER is not None:
         methods.LOGGER.log({"compression_ratio": top_correct_r / head_dim})
@@ -122,7 +124,10 @@ def mask_attn_pca_topk(args, layer_idx, attn_weights, attention_mask, query_stat
         true_probs = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
         mass = torch.gather(true_probs, -1, i2).sum(-1)
         mass = mass[:, :, top_k:].mean().item()
-        print(f"LayerId:{layer_idx}|MassRecall@{top_k}:{mass:.4f}")
+        if getattr(args, "quiet_diagnostics", False):
+            methods.record_diagnostic("mass_recall", layer_idx, mass)
+        else:
+            print(f"LayerId:{layer_idx}|MassRecall@{top_k}:{mass:.4f}")
         if methods.LOGGER is not None:
             methods.LOGGER.log({f"mass_recall_layer_{layer_idx}": mass})
 
