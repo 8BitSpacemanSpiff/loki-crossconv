@@ -65,6 +65,19 @@ def head_matrix(stacked, head):
     return t.reshape(-1, t.shape[-1]).to(torch.float64)
 
 
+def repeat_kv_to_query_heads(K_all, Q_all):
+    # GQA/MQA models save fewer key/value heads than query heads. Runtime attention
+    # repeats KV heads before scoring, so the offline calibration should do the same.
+    k_heads = K_all.shape[-3]
+    q_heads = Q_all.shape[-3]
+    if k_heads == q_heads:
+        return K_all
+    if q_heads % k_heads != 0:
+        raise ValueError(f"cannot repeat {k_heads} key heads to {q_heads} query heads")
+    repeats = q_heads // k_heads
+    return K_all.repeat_interleave(repeats, dim=-3)
+
+
 def inv_sqrt_psd(mat):
     # symmetric PSD inverse square root via eigendecomposition, with a floor
     evals, evecs = torch.linalg.eigh(mat)
@@ -135,6 +148,7 @@ def main():
         # Drop the trailing (possibly partial) batch, matching pca.py.
         K_all = torch.stack(kt[:-1], dim=0).to(device)
         Q_all = torch.stack(qt[:-1], dim=0).to(device)
+        K_all = repeat_kv_to_query_heads(K_all, Q_all)
         assert K_all.shape == Q_all.shape, f"key/query shape mismatch: {K_all.shape} vs {Q_all.shape}"
         num_heads = K_all.shape[-3]
         d = K_all.shape[-1]

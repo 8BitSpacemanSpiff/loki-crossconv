@@ -58,6 +58,16 @@ def to_columns(comps, top_r):
     return cols[:, :, :top_r].contiguous()
 
 
+def repeat_heads_to(target_heads, tensor, head_dim=-3):
+    heads = tensor.shape[head_dim]
+    if heads == target_heads:
+        return tensor
+    if target_heads % heads != 0:
+        raise ValueError(f"cannot repeat {heads} heads to {target_heads} heads")
+    repeats = target_heads // heads
+    return tensor.repeat_interleave(repeats, dim=head_dim)
+
+
 def topk_indices(scores, k):
     # scores: (num_heads, q_len, k_len) with causal -inf already applied.
     return torch.topk(scores, k, dim=-1).indices
@@ -125,13 +135,17 @@ def main():
             Q_all = load_layer(layer_id, f"{args.tensor_root}/query", "query")
             if K_all is None or Q_all is None:
                 continue
+            q_heads = Q_all.shape[-3]
+            K_all = repeat_heads_to(q_heads, K_all, head_dim=-3)
             kc_file = f"{args.key_basis}/pca_components/pca_components_layer_{layer_id}.pt"
-            key_cols = to_columns(torch.load(kc_file, map_location="cpu").float(), top_r).to(args.device)
+            key_cols = to_columns(torch.load(kc_file, map_location="cpu").float(), top_r)
+            key_cols = repeat_heads_to(q_heads, key_cols, head_dim=0).to(args.device)
             if args.method == "loki":
                 query_cols = key_cols                      # shared basis
             else:
                 qc_file = f"{args.query_basis}/pca_components/pca_components_layer_{layer_id}.pt"
-                query_cols = to_columns(torch.load(qc_file, map_location="cpu").float(), top_r).to(args.device)
+                query_cols = to_columns(torch.load(qc_file, map_location="cpu").float(), top_r)
+                query_cols = repeat_heads_to(q_heads, query_cols, head_dim=0).to(args.device)
 
             # Flatten (num_files, batch, ...) -> a list of sequences.
             nf, b, H, seq, d = K_all.shape
