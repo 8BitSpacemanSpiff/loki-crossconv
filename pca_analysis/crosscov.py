@@ -52,7 +52,7 @@ def load_tensors_for_layer(layer_id, folder_path, tensor_type="key"):
     tensors = []
     for f in files:
         try:
-            tensors.append(torch.load(f))
+            tensors.append(torch.load(f, map_location="cpu"))
         except Exception as e:
             print(f"Error loading {f}: {e}")
     return tensors

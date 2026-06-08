@@ -48,7 +48,7 @@ def load_layer(layer_id, folder, tensor_type):
     files = sorted(files, key=lambda x: get_file_idx(x, tensor_type))
     if not files:
         return None
-    return torch.stack([torch.load(f) for f in files][:-1], dim=0)
+    return torch.stack([torch.load(f, map_location="cpu") for f in files][:-1], dim=0)
 
 
 def to_columns(comps, top_r):
@@ -125,12 +125,12 @@ def main():
             if K_all is None or Q_all is None:
                 continue
             kc_file = f"{args.key_basis}/pca_components/pca_components_layer_{layer_id}.pt"
-            key_cols = to_columns(torch.load(kc_file).float(), top_r)
+            key_cols = to_columns(torch.load(kc_file, map_location="cpu").float(), top_r)
             if args.method == "loki":
                 query_cols = key_cols                      # shared basis
             else:
                 qc_file = f"{args.query_basis}/pca_components/pca_components_layer_{layer_id}.pt"
-                query_cols = to_columns(torch.load(qc_file).float(), top_r)
+                query_cols = to_columns(torch.load(qc_file, map_location="cpu").float(), top_r)
 
             # Flatten (num_files, batch, ...) -> a list of sequences.
             nf, b, H, seq, d = K_all.shape
