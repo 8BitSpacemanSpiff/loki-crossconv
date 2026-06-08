@@ -104,14 +104,19 @@ def evaluate_ppl(model_id="facebook/opt-350m",
     nlls = []
     prev_end_loc = 0
     max_chunks = int(os.getenv("LOKI_MAX_CHUNKS", "0"))
+    skip_chunks = int(os.getenv("LOKI_SKIP_CHUNKS", "0"))
+    processed_chunks = 0
 
     model = model.to(device)
 
     for chunk_idx, begin_loc in enumerate(tqdm(range(0, seq_len, stride))):
-        if max_chunks > 0 and chunk_idx >= max_chunks:
+        end_loc = min(begin_loc + max_length, seq_len)
+        if skip_chunks > 0 and chunk_idx < skip_chunks:
+            prev_end_loc = end_loc
+            continue
+        if max_chunks > 0 and processed_chunks >= max_chunks:
             print(f"Stopping after {max_chunks} chunks because LOKI_MAX_CHUNKS is set")
             break
-        end_loc = min(begin_loc + max_length, seq_len)
         trg_len = end_loc - prev_end_loc  # may be different from stride on last loop
         input_ids = encodings.input_ids[:, begin_loc:end_loc].to(device)
         target_ids = input_ids.clone()
@@ -129,6 +134,7 @@ def evaluate_ppl(model_id="facebook/opt-350m",
             neg_log_likelihood = outputs.loss
 
         nlls.append(neg_log_likelihood)
+        processed_chunks += 1
 
         prev_end_loc = end_loc
         if end_loc == seq_len:
