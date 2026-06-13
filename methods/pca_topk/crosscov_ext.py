@@ -30,6 +30,7 @@ import math
 import os
 
 import torch
+import torch.nn.functional as F
 
 import methods
 from .utils import PCA_DATA_PATH
@@ -115,28 +116,30 @@ def mask_attn_crosscov_compress(args, layer_idx, attn_weights, attention_mask, q
     return mask, alpha
 
 
-def mask_attn_crosscov_evict(args, layer_idx, attn_weights, attention_mask, query_states,
-                             key_states, comps_key_r, rq_gram, top_r, evict_ratio,
-                             sink_tokens, recent_window):
-    """Static query-weighted score-energy eviction. Returns (masked_weights, alpha)."""
+def _static_evict_mask(args, layer_idx, attn_weights, score, evict_ratio,
+                       sink_tokens, recent_window, mass_label):
+    """Shared static-eviction protocol. `score` is per-token importance (b, H, S);
+    higher = keep. All eviction-family methods (crosscov / keydiff / keynorm) call
+    this with the SAME protection + budget + diagnostics so the comparison is fair.
+
+    Budget: --keep-tokens N (absolute, matches KeyDiff's budget protocol) overrides
+    --evict-ratio when set > 0.
+    """
     bsz, n_heads, q_len, S = attn_weights.shape
-    head_dim = key_states.shape[-1]
+    keep_tokens = getattr(args, "keep_tokens", 0)
+    if keep_tokens and keep_tokens > 0:
+        keep = min(int(keep_tokens), S)
+    else:
+        keep = max(1, int(round((1.0 - evict_ratio) * S)))
 
-    key_lat = torch.matmul(key_states, comps_key_r).to(query_states.dtype)     # (b, H, S, r)
-    # score_j = k~_j^T G k~_j  (per head)
-    Gk = torch.matmul(key_lat, rq_gram)                                        # (b, H, S, r)
-    score = torch.sum(Gk * key_lat, dim=-1)                                    # (b, H, S)
-
-    keep = max(1, int(round((1.0 - evict_ratio) * S)))
-    # protect sinks + recent window from eviction by forcing their score to +inf
-    protect = torch.full_like(score, 0.0)
+    protect = torch.zeros_like(score)
     if sink_tokens > 0:
         protect[..., :min(sink_tokens, S)] = float("inf")
     if recent_window > 0:
         protect[..., max(0, S - recent_window):] = float("inf")
     score_protected = torch.where(torch.isinf(protect), protect, score)
 
-    keep_idx = torch.topk(score_protected, min(keep, S), dim=-1).indices       # (b, H, keep)
+    keep_idx = torch.topk(score_protected, min(keep, S), dim=-1).indices
     retained = torch.zeros_like(score, dtype=torch.bool)
     retained.scatter_(-1, keep_idx, True)                                      # (b, H, S)
 
@@ -144,18 +147,50 @@ def mask_attn_crosscov_evict(args, layer_idx, attn_weights, attention_mask, quer
         true_probs = torch.softmax(attn_weights, dim=-1, dtype=torch.float32)  # (b,H,q,S)
         retained_q = retained.unsqueeze(2).expand(bsz, n_heads, q_len, S)
         mass = (true_probs * retained_q).sum(-1).mean().item()
-        _log(args, layer_idx, "evict_mass_kept", mass, "EvictMassKept")
+        _log(args, layer_idx, mass_label, mass, mass_label)
     if methods.LOGGER is not None:
-        methods.LOGGER.log({"evict_ratio_actual_layer_%d" % layer_idx: 1.0 - keep / S})
+        methods.LOGGER.log({f"evict_ratio_actual_layer_{layer_idx}": 1.0 - keep / S})
 
-    # broadcast the per-token retained set across all query rows; keep causal structure
     col_mask = retained.unsqueeze(2)                                           # (b, H, 1, S)
     mask = torch.where(col_mask, attn_weights, torch.full_like(attn_weights, float("-inf")))
-    # alpha: softmax mass kept under the approximate (here exact) scores over retained set
     alpha = torch.sum(torch.softmax(mask, dim=-1), -1, True)
     return mask, alpha
 
 
+def mask_attn_crosscov_evict(args, layer_idx, attn_weights, attention_mask, query_states,
+                             key_states, comps_key_r, rq_gram, top_r, evict_ratio,
+                             sink_tokens, recent_window):
+    """OURS: static query-weighted score-energy eviction, score_j = k~_j^T G k~_j."""
+    key_lat = torch.matmul(key_states, comps_key_r).to(query_states.dtype)     # (b, H, S, r)
+    Gk = torch.matmul(key_lat, rq_gram)                                        # (b, H, S, r)
+    score = torch.sum(Gk * key_lat, dim=-1)                                    # (b, H, S)
+    return _static_evict_mask(args, layer_idx, attn_weights, score, evict_ratio,
+                              sink_tokens, recent_window, "evict_mass_kept")
+
+
+def mask_attn_keydiff(args, layer_idx, attn_weights, attention_mask, query_states,
+                      key_states, evict_ratio, sink_tokens, recent_window):
+    """BASELINE (KeyDiff, arXiv 2504.15364): evict keys most similar to the anchor
+    = mean of L2-normalized keys. Keep geometrically distinctive (low-similarity)
+    keys. Query-agnostic, no calibration. Static (anchor over the full sequence) to
+    match the single-forward harness; the streaming anchor is a separate efficiency axis.
+    """
+    kn = F.normalize(key_states.float(), dim=-1)                               # (b, H, S, d)
+    anchor = kn.mean(dim=-2, keepdim=True)                                     # (b, H, 1, d)
+    cos = (kn * anchor).sum(-1)                                                # (b, H, S), unnorm. anchor ok for ranking
+    score = -cos                                                              # higher = more distinctive = keep
+    return _static_evict_mask(args, layer_idx, attn_weights, score, evict_ratio,
+                              sink_tokens, recent_window, "keydiff_mass_kept")
+
+
+def mask_attn_keynorm(args, layer_idx, attn_weights, attention_mask, query_states,
+                      key_states, evict_ratio, sink_tokens, recent_window):
+    """CONTROL: score_j = ||k_j||^2, the isotropic (Rq = I) limit of crosscov-evict.
+    Separates 'query distribution matters' (crosscov beats this) from 'magnitude matters'.
+    """
+    score = (key_states.float() ** 2).sum(-1)                                  # (b, H, S)
+    return _static_evict_mask(args, layer_idx, attn_weights, score, evict_ratio,
+                              sink_tokens, recent_window, "keynorm_mass_kept")
 def _log(args, layer_idx, key, value, label):
     if getattr(args, "quiet_diagnostics", False):
         methods.record_diagnostic(key, layer_idx, value)

@@ -106,4 +106,21 @@ sym_align = np.abs(np.diag(Uc.T @ Vct.T))
 assert np.allclose(sym_align, 1.0, atol=1e-6)
 print(f"C6 ok: symmetric C (K==Q) gives U==V up to sign (min|diag|={sym_align.min():.6f})")
 
+
+# ---- C7: KeyDiff keeps geometrically distinctive keys -------------------------
+# build a cache: many near-duplicate clustered keys + a few distinctive ones.
+clustered = np.ones((40, d)) + 0.01 * rng.standard_normal((40, d))
+distinct = rng.standard_normal((4, d)) * 3.0
+Kc = np.vstack([clustered, distinct])
+kn = Kc / np.linalg.norm(Kc, axis=1, keepdims=True)
+anchor = kn.mean(0)
+cos = kn @ anchor                                   # similarity to anchor
+keydiff_importance = -cos                           # keep = most distinctive = lowest cos
+keep = 8
+kept = set(np.argsort(keydiff_importance)[::-1][:keep].tolist())
+distinct_idx = set(range(40, 44))
+# all 4 distinctive keys should survive an 8-token budget
+assert distinct_idx.issubset(kept), (kept, distinct_idx)
+print(f"C7 ok: KeyDiff retains all distinctive keys (kept={sorted(kept)})")
+
 print("\nALL CHECKS PASSED")
