@@ -32,7 +32,7 @@ import subprocess
 import sys
 
 
-PPL_RE = re.compile(r"tensor\(([-+0-9.eE]+)\)|^([-+0-9.]+)\s*$", re.M)
+PPL_RE = re.compile(r"tensor\(([-+0-9.eE]+)(?:[,)]|$)|^([-+0-9.]+)\s*$", re.M)
 DIAG_RE = re.compile(r"^(\w+):\s+overall=([-+0-9.eE]+)\s+layers=(\d+)\s+samples=(\d+)", re.M)
 
 
