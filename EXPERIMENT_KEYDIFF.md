@@ -17,6 +17,10 @@ python tools/llama31_8k_compat_config.py /home/models/Llama-3.1-8B-Instruct
 This backs up the original config and removes the unsupported extended-RoPE entry.
 Restore with `--restore` before any >8K experiment.
 
+Dataset note: `dataset=c4` first checks `LOKI_C4_PATH` and the old lab path. If no
+local dataset exists, it streams C4 validation from Hugging Face. Set
+`LOKI_C4_STREAM_SAMPLES` if you want more or fewer calibration/evaluation samples.
+
 ## Tier 0 — runs immediately, no calibration (KeyDiff vs key-norm)
 You can sanity the baselines this second:
 ```

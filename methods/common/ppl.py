@@ -69,6 +69,30 @@ def get_model(
 
     return model
 
+
+def load_text_dataset(dataset):
+    if dataset == "wikitext-test":
+        return load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    if dataset == "wikitext-valid":
+        return load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
+    if dataset == "c4":
+        c4_path = os.getenv("LOKI_C4_PATH", "/pscratch/sd/p/prajwal/c4-sample")
+        if os.path.isdir(c4_path):
+            return load_from_disk(c4_path)
+        stream_count = int(os.getenv("LOKI_C4_STREAM_SAMPLES", "20000"))
+        print(f"[INFO] {c4_path} not found; streaming {stream_count} C4 validation samples from Hugging Face")
+        stream = load_dataset("allenai/c4", "en", split="validation", streaming=True)
+        return Dataset.from_dict({"text": [row["text"] for _, row in zip(range(stream_count), stream)]})
+    if dataset == "bookcorpus":
+        bookcorpus_path = os.getenv("LOKI_BOOKCORPUS_PATH", "/pscratch/sd/p/prajwal/bookcorpus-sample")
+        if os.path.isdir(bookcorpus_path):
+            return load_from_disk(bookcorpus_path)
+        raise FileNotFoundError(
+            f"BookCorpus path not found: {bookcorpus_path}. Set LOKI_BOOKCORPUS_PATH to a local dataset."
+        )
+    raise ValueError("Dataset not supported")
+
+
 def evaluate_ppl(model_id="facebook/opt-350m", 
             dataset="wikitext",
             sequence_length=2048,
@@ -82,16 +106,7 @@ def evaluate_ppl(model_id="facebook/opt-350m",
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
     print (f"Using {dataset}")
-    if dataset == "wikitext-test":
-        test = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-    elif dataset == "wikitext-valid":
-        test = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
-    elif dataset == "c4":
-        test = load_from_disk('/pscratch/sd/p/prajwal/c4-sample')
-    elif dataset == "bookcorpus":
-        test = load_from_disk('/pscratch/sd/p/prajwal/bookcorpus-sample')
-    else:
-        raise ValueError("Dataset not supported")
+    test = load_text_dataset(dataset)
 
     encodings = tokenizer("\n\n".join(test["text"]), return_tensors="pt")
     print (f"Total number of tokens (excluding pad token) = {len(encodings.input_ids[0])}")
