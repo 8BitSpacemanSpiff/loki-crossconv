@@ -147,6 +147,26 @@ def pooled_gqa_u_basis(K_all, Q_all, kv_head):
     return rows, explained
 
 
+def pooled_gqa_rq(Q_all, kv_head, group):
+    # Pooled query second moment for one KV head: sum over the query heads in its
+    # group of E[q q^T]. This matches the group-summed score-energy objective used
+    # for query-weighted eviction, so a single (head_dim x head_dim) Rq per KV head
+    # scores keys for the whole group.
+    d = Q_all.shape[-1]
+    Rq = torch.zeros(d, d, dtype=torch.float64, device=Q_all.device)
+    for offset in range(group):
+        q_head = kv_head * group + offset
+        Q = head_matrix(Q_all, q_head)
+        N = Q.shape[0]
+        Rq = Rq + (Q.transpose(0, 1) @ Q) / N
+    return Rq
+
+
+def save_rq(out_side_dir, layer_id, rq):
+    os.makedirs(f"{out_side_dir}/rq_gram", exist_ok=True)
+    torch.save(rq.to(torch.float32), f"{out_side_dir}/rq_gram/rq_gram_layer_{layer_id}.pt")
+
+
 def save_layer(out_side_dir, layer_id, comps, means, explained):
     os.makedirs(f"{out_side_dir}/pca_components", exist_ok=True)
     os.makedirs(f"{out_side_dir}/pca_means", exist_ok=True)
@@ -158,13 +178,14 @@ def save_layer(out_side_dir, layer_id, comps, means, explained):
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten] [--pool-gqa] [--device cpu|cuda]")
+        print("Usage: python crosscov.py <num_layers> <tensor_root> <output_dir> [--whiten] [--pool-gqa] [--emit-rq] [--device cpu|cuda]")
         sys.exit(1)
     num_layers = int(sys.argv[1])
     tensor_root = sys.argv[2]
     output_dir = sys.argv[3]
     whiten = "--whiten" in sys.argv[4:]
     pool_gqa = "--pool-gqa" in sys.argv[4:]
+    emit_rq = "--emit-rq" in sys.argv[4:]
     if pool_gqa and whiten:
         print("[ERROR] --pool-gqa currently supports the raw CrossCov-U shared basis only, not --whiten")
         sys.exit(1)
@@ -212,6 +233,17 @@ def main():
         zeros = torch.zeros(num_heads, d)
         save_layer(f"{output_dir}/key", layer_id, key_comps, zeros, key_expl)
         save_layer(f"{output_dir}/query", layer_id, query_comps, zeros, query_expl)
+
+        if emit_rq:
+            # One pooled Rq per KV head (head_dim x head_dim), used by query-weighted
+            # eviction. When not pooling, num_heads == num query heads and group == 1.
+            n_kv = K_all.shape[-3] if pool_gqa else (Q_all.shape[-3])
+            group = (Q_all.shape[-3] // n_kv) if pool_gqa else 1
+            rq = torch.zeros(n_kv, d, d)
+            for kv in range(n_kv):
+                rq[kv] = pooled_gqa_rq(Q_all, kv, group).cpu()
+            save_rq(f"{output_dir}/key", layer_id, rq)
+
         print(f"  layer {layer_id}: heads={num_heads} d={d} N={head_matrix(K_all,0).shape[0]} saved")
 
 

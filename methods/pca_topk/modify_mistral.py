@@ -13,6 +13,11 @@ from functools import partial
 
 from .utils import mask_attn_pca_topk, get_pca_components
 from .crosscov_utils import mask_attn_crosscov, get_crosscov_components
+from .crosscov_ext import (
+    mask_attn_crosscov_compress,
+    mask_attn_crosscov_evict,
+    get_rq_gram,
+)
 import methods
 
 try:
@@ -55,11 +60,16 @@ def get_pca_forward(args):
             )
 
         use_crosscov = getattr(args, "use_crosscov", False)
+        crosscov_mode = getattr(args, "crosscov_mode", "select")
         if use_crosscov:
             if not hasattr(self, "cc_key_r"):
                 (self.cc_key_full, self.cc_key_r,
                  self.cc_query_full, self.cc_query_r) = get_crosscov_components(
                     args, self.layer_idx, self.head_dim, args.top_r, self.num_key_value_groups, repeat_kv)
+            if crosscov_mode == "evict" and not hasattr(self, "cc_rq_gram"):
+                self.cc_rq_gram = get_rq_gram(
+                    args, self.layer_idx, self.head_dim, args.top_r,
+                    self.num_key_value_groups, repeat_kv, self.cc_key_r)
         else:
             if not hasattr(self, "pca_components"):
                 self.pca_means, self.pca_components, self.pca_components_r_key = get_pca_components(args, self.layer_idx, self.head_dim, args.top_r, self.num_key_value_groups, repeat_kv)
@@ -121,9 +131,22 @@ def get_pca_forward(args):
                         f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                     )
                 attn_weights = attn_weights + attention_mask
-            attn_weights, alpha = mask_attn_crosscov(
-                args, self.layer_idx, attn_weights, attention_mask, query_states, key_states,
-                self.cc_key_r, self.cc_query_r, args.top_r, topk)
+            if crosscov_mode == "select":
+                attn_weights, alpha = mask_attn_crosscov(
+                    args, self.layer_idx, attn_weights, attention_mask, query_states, key_states,
+                    self.cc_key_r, self.cc_query_r, args.top_r, topk)
+            elif crosscov_mode == "compress":
+                attn_weights, alpha = mask_attn_crosscov_compress(
+                    args, self.layer_idx, attn_weights, attention_mask, query_states, key_states,
+                    self.cc_key_r, self.cc_query_r, args.top_r, topk)
+            elif crosscov_mode == "evict":
+                attn_weights, alpha = mask_attn_crosscov_evict(
+                    args, self.layer_idx, attn_weights, attention_mask, query_states, key_states,
+                    self.cc_key_r, self.cc_rq_gram, args.top_r,
+                    getattr(args, "evict_ratio", 0.5), getattr(args, "sink_tokens", 16),
+                    getattr(args, "recent_window", 64))
+            else:
+                raise ValueError(f"unknown crosscov_mode: {crosscov_mode}")
         else:
             self.pca_means = self.pca_means.to(key_states.dtype)
             self.pca_components_r_key = self.pca_components_r_key.to(key_states.dtype)
