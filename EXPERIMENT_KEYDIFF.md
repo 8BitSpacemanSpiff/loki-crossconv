@@ -8,6 +8,15 @@ Only `evict` needs the one-time CrossCov basis + R_q for Llama.
 Model facts: Llama-3.1-8B-Instruct is 32 layers, 32 query heads, 8 KV heads (GQA),
 head_dim 128. Use `--model-type llama --pool-gqa`.
 
+Compatibility note: this repo pins `transformers==4.40.2`, which cannot parse the
+new Llama-3.1 `rope_scaling: {"rope_type": "llama3", ...}` config. For the 8K-only
+WikiText/C4 runs below, patch the local model config once:
+```
+python tools/llama31_8k_compat_config.py /home/models/Llama-3.1-8B-Instruct
+```
+This backs up the original config and removes the unsupported extended-RoPE entry.
+Restore with `--restore` before any >8K experiment.
+
 ## Tier 0 — runs immediately, no calibration (KeyDiff vs key-norm)
 You can sanity the baselines this second:
 ```
