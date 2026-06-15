@@ -5,6 +5,16 @@ def get_h2o_args(parser):
     parser.add_argument("--heavy-ratio", type=float, default=0.1, help="H2O heavy ratio," "set to 0.1 by default")
     return parser
 
+def get_energy_args(parser):
+    parser.add_argument("--use-energy-evict", action='store_true', default=False,
+                        help="use the query-weighted energy KV evictor")
+    parser.add_argument("--keep-ratio", type=float, default=0.1,
+                        help="fraction of tokens kept by energy top-k")
+    if not any("--recent-ratio" in action.option_strings for action in parser._actions):
+        parser.add_argument("--recent-ratio", type=float, default=0.1,
+                            help="fraction of tokens kept by the recent window")
+    return parser
+
 def get_topk_args(parser):
     parser.add_argument("--use-topk", action='store_true', default=False, help="use the H2O algos")
     parser.add_argument("--top-k", type=float, default=-1, help="top k tokens to consider - >1 exact number, <1 fraction of tokens to consider," "set to -1 to use all tokens")
@@ -31,6 +41,9 @@ def get_modifier(args):
     elif args.use_h2o:
         method_name = "h2o"
         module_name = ".baselines.h2o.modify_" + args.model_type
+    elif args.use_energy_evict:
+        method_name = "energy"
+        module_name = ".baselines.energy.modify_" + args.model_type
     elif args.use_pca_topk:
         method_name = "pca_topk"
         module_name = ".pca_topk.modify_" + args.model_type
@@ -52,6 +65,10 @@ def get_config_dict(args):
         if args.recent_ratio != -1:
             print ("[WARNING] Recent Ratio is override by Heavy Ratio for H2O")
         config_dict["recent_ratio"] = args.heavy_ratio
+    elif args.use_energy_evict:
+        config_dict["method"] = "energy"
+        config_dict["keep_ratio"] = args.keep_ratio
+        config_dict["recent_ratio"] = args.recent_ratio if args.recent_ratio != -1 else args.keep_ratio
     elif args.use_topk:
         config_dict["method"] = "topk"
         config_dict["top_k"] = args.top_k
