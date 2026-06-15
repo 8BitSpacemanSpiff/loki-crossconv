@@ -44,9 +44,8 @@ def run(args):
         args.model_id,
         torch_dtype=torch.float16,
         attn_implementation="eager",
-        device_map="cuda",
         trust_remote_code=True,
-    )
+    ).to("cuda")
     model.eval()
     if args.use_evict:
         make_mistral_attention_eviction(args)
