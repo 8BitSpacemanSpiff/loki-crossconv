@@ -42,6 +42,21 @@ def _apply_rotary(query_states, key_states, cos, sin, position_ids):
         return apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
 
+def _recover_cached_values(past_key_value, layer_idx, fallback):
+    candidates = []
+    if hasattr(past_key_value, "value_cache"):
+        candidates.append(past_key_value.value_cache[layer_idx])
+    if hasattr(past_key_value, "layers"):
+        layer = past_key_value.layers[layer_idx]
+        for attr in ("values", "value_cache", "value_states", "v_cache"):
+            if hasattr(layer, attr):
+                candidates.append(getattr(layer, attr))
+    for candidate in candidates:
+        if torch.is_tensor(candidate):
+            return candidate
+    return fallback
+
+
 def get_eviction_forward(args):
     def modified_forward(
         self,
@@ -85,6 +100,8 @@ def get_eviction_forward(args):
             if "cache_position" in kwargs:
                 cache_kwargs["cache_position"] = kwargs["cache_position"]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            if value_states.shape[-2] != key_states.shape[-2]:
+                value_states = _recover_cached_values(past_key_value, self.layer_idx, value_states)
 
         key_states = repeat_kv(key_states, num_key_value_groups)
         value_states = repeat_kv(value_states, num_key_value_groups)
