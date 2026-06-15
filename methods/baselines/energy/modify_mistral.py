@@ -17,11 +17,21 @@ def _mistral_shape(self):
     return num_heads, num_key_value_heads, num_key_value_groups, hidden_size
 
 
-def _rotary_emb(self, value_states, kv_seq_len, position_ids):
+def _rotary_emb(self, value_states, kv_seq_len, position_ids, kwargs):
+    position_embeddings = kwargs.get("position_embeddings")
+    if position_embeddings is not None:
+        return position_embeddings
     try:
         return self.rotary_emb(value_states, seq_len=kv_seq_len)
     except TypeError:
         return self.rotary_emb(value_states, position_ids)
+
+
+def _apply_rotary(query_states, key_states, cos, sin, position_ids):
+    try:
+        return apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+    except TypeError:
+        return apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
 
 def get_energy_forward(args):
@@ -59,8 +69,8 @@ def get_energy_forward(args):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = _rotary_emb(self, value_states, kv_seq_len, position_ids)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        cos, sin = _rotary_emb(self, value_states, kv_seq_len, position_ids, kwargs)
+        query_states, key_states = _apply_rotary(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}
