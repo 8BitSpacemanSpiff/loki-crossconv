@@ -33,6 +33,11 @@ def _apply_rotary(query_states, key_states, cos, sin, position_ids):
     except TypeError:
         return apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+def _mask_value(attn_weights, attention_mask):
+    if attention_mask is None or attention_mask.dtype == torch.bool:
+        return torch.finfo(attn_weights.dtype).min
+    return torch.min(attention_mask)
+
 def get_h2o_forward(args):
     def modified_forward(
         self,
@@ -113,7 +118,7 @@ def get_h2o_forward(args):
         mask_bottom = torch.tril(mask_bottom, diagonal=0)
 
         # mask_bottom = ones
-        attn_weights[~mask_bottom] = torch.min(attention_mask)
+        attn_weights[~mask_bottom] = _mask_value(attn_weights, attention_mask)
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)

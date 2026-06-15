@@ -34,6 +34,12 @@ def _apply_rotary(query_states, key_states, cos, sin, position_ids):
         return apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
 
+def _mask_value(attn_weights, attention_mask):
+    if attention_mask is None or attention_mask.dtype == torch.bool:
+        return torch.finfo(attn_weights.dtype).min
+    return torch.min(attention_mask)
+
+
 def get_energy_forward(args):
     def modified_forward(
         self,
@@ -128,8 +134,7 @@ def get_energy_forward(args):
         keep = torch.logical_or(keep, recent)
         keep = torch.tril(keep, diagonal=0)
 
-        mask_value = torch.min(attention_mask) if attention_mask is not None else neg
-        attn_weights[~keep] = mask_value
+        attn_weights[~keep] = _mask_value(attn_weights, attention_mask)
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
