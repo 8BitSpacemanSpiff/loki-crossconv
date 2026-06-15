@@ -58,16 +58,19 @@ def run(args):
         scores = []
         for ex in ds:
             prompt = PROMPT.format(context=ex["context"], input=ex["input"])
-            ids = tok(
+            enc = tok(
                 prompt,
                 return_tensors="pt",
                 truncation=True,
                 max_length=args.max_len,
-            ).input_ids.cuda()
+            )
+            ids = enc.input_ids.cuda()
+            attention_mask = enc.attention_mask.cuda()
             reset_evict()
             with torch.no_grad():
                 out = model.generate(
                     ids,
+                    attention_mask=attention_mask,
                     max_new_tokens=args.max_gen,
                     do_sample=False,
                     pad_token_id=tok.eos_token_id,

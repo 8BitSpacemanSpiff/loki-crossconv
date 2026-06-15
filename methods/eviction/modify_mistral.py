@@ -82,6 +82,8 @@ def get_eviction_forward(args):
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}
+            if "cache_position" in kwargs:
+                cache_kwargs["cache_position"] = kwargs["cache_position"]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         key_states = repeat_kv(key_states, num_key_value_groups)
