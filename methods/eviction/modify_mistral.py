@@ -10,11 +10,12 @@ from transformers.models.mistral.modeling_mistral import MistralAttention, repea
 from .selectors import build_keep_mask
 
 
-_EVICT = {"masks": {}, "values": {}}
+_EVICT = {"masks": {}, "keys": {}, "values": {}}
 
 
 def reset_evict():
     _EVICT["masks"].clear()
+    _EVICT["keys"].clear()
     _EVICT["values"].clear()
 
 
@@ -81,26 +82,42 @@ def get_eviction_forward(args):
         cos, sin = _rotary_emb(self, value_states, kv_seq_len, position_ids, kwargs)
         query_states, key_states = _apply_rotary(query_states, key_states, cos, sin, position_ids)
 
+        current_key_states = key_states
+        current_value_states = value_states
+
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}
             if "cache_position" in kwargs:
                 cache_kwargs["cache_position"] = kwargs["cache_position"]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        key_states = repeat_kv(key_states, num_key_value_groups)
-        value_states = repeat_kv(value_states, num_key_value_groups)
-
-        if value_states.shape[-2] != key_states.shape[-2]:
+        is_prefill = q_len > 1
+        if is_prefill:
+            key_states = repeat_kv(key_states, num_key_value_groups)
+            value_states = repeat_kv(value_states, num_key_value_groups)
+        else:
+            current_key_states = repeat_kv(current_key_states, num_key_value_groups)
+            current_value_states = repeat_kv(current_value_states, num_key_value_groups)
+            prev_keys = _EVICT["keys"].get(self.layer_idx)
             prev_values = _EVICT["values"].get(self.layer_idx)
-            if prev_values is None:
-                raise RuntimeError(
-                    f"value cache unavailable for layer {self.layer_idx}: "
-                    f"key_len={key_states.shape[-2]} value_len={value_states.shape[-2]}"
-                )
-            if prev_values.shape[-2] < key_states.shape[-2]:
-                value_states = torch.cat([prev_values, value_states], dim=-2)
+            if prev_keys is None or prev_values is None:
+                key_states = repeat_kv(key_states, num_key_value_groups)
+                value_states = repeat_kv(value_states, num_key_value_groups)
             else:
-                value_states = prev_values[:, :, : key_states.shape[-2], :]
+                key_states = torch.cat([prev_keys, current_key_states], dim=-2)
+                value_states = torch.cat([prev_values, current_value_states], dim=-2)
+        if attention_mask is not None:
+            target_len = attention_mask.shape[-1]
+            if key_states.shape[-2] > target_len:
+                key_states = key_states[:, :, :target_len, :]
+                value_states = value_states[:, :, :target_len, :]
+            elif key_states.shape[-2] < target_len:
+                raise RuntimeError(
+                    f"explicit eviction cache shorter than attention mask at layer {self.layer_idx}: "
+                    f"kv_len={key_states.shape[-2]} mask_len={target_len}"
+                )
+        kv_seq_len = key_states.shape[-2]
+        _EVICT["keys"][self.layer_idx] = key_states.detach()
         _EVICT["values"][self.layer_idx] = value_states.detach()
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
@@ -119,7 +136,6 @@ def get_eviction_forward(args):
             attn_weights = attn_weights + attention_mask
 
         Lk = attn_weights.shape[-1]
-        is_prefill = q_len > 1
 
         if is_prefill:
             with torch.no_grad():
