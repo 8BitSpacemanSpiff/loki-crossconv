@@ -44,6 +44,55 @@ def _apply_rotary(query_states, key_states, cos, sin, position_ids):
         return apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
 
+def _value_candidates_from_cache(past_key_value, layer_idx):
+    candidates = []
+    if past_key_value is None:
+        return candidates
+    if hasattr(past_key_value, "value_cache"):
+        try:
+            candidates.append(past_key_value.value_cache[layer_idx])
+        except Exception:
+            pass
+    if hasattr(past_key_value, "layers"):
+        try:
+            layer = past_key_value.layers[layer_idx]
+            for attr in (
+                "values",
+                "value_cache",
+                "value_states",
+                "v_cache",
+                "_values",
+                "cache_value",
+                "value",
+            ):
+                if hasattr(layer, attr):
+                    candidates.append(getattr(layer, attr))
+            if isinstance(layer, (tuple, list)) and len(layer) > 1:
+                candidates.append(layer[1])
+        except Exception:
+            pass
+    try:
+        layer_item = past_key_value[layer_idx]
+        if isinstance(layer_item, (tuple, list)) and len(layer_item) > 1:
+            candidates.append(layer_item[1])
+    except Exception:
+        pass
+    return [c for c in candidates if torch.is_tensor(c)]
+
+
+def _recover_value_states(past_key_value, layer_idx, key_states, value_states, num_key_value_groups):
+    for candidate in _value_candidates_from_cache(past_key_value, layer_idx):
+        cand = candidate
+        if cand.shape[-2] < key_states.shape[-2]:
+            continue
+        cand = cand[:, :, : key_states.shape[-2], :]
+        if cand.shape[1] != key_states.shape[1]:
+            cand = repeat_kv(cand, num_key_value_groups)
+        if cand.shape[:3] == key_states.shape[:3]:
+            return cand
+    return value_states
+
+
 def get_eviction_forward(args):
     def modified_forward(
         self,
@@ -103,6 +152,14 @@ def get_eviction_forward(args):
             if prev_keys is None or prev_values is None:
                 key_states = repeat_kv(key_states, num_key_value_groups)
                 value_states = repeat_kv(value_states, num_key_value_groups)
+                if value_states.shape[-2] != key_states.shape[-2]:
+                    value_states = _recover_value_states(
+                        past_key_value,
+                        self.layer_idx,
+                        key_states,
+                        value_states,
+                        num_key_value_groups,
+                    )
             else:
                 key_states = torch.cat([prev_keys, current_key_states], dim=-2)
                 value_states = torch.cat([prev_values, current_value_states], dim=-2)
@@ -117,6 +174,12 @@ def get_eviction_forward(args):
                     f"kv_len={key_states.shape[-2]} mask_len={target_len}"
                 )
         kv_seq_len = key_states.shape[-2]
+        if value_states.shape[-2] != kv_seq_len:
+            raise RuntimeError(
+                f"eviction K/V length mismatch at layer {self.layer_idx}: "
+                f"key_len={kv_seq_len} value_len={value_states.shape[-2]} "
+                f"cache_type={type(past_key_value).__name__ if past_key_value is not None else None}"
+            )
         _EVICT["keys"][self.layer_idx] = key_states.detach()
         _EVICT["values"][self.layer_idx] = value_states.detach()
 
