@@ -204,11 +204,13 @@ def get_eviction_forward(args):
             )
 
         if attention_mask is not None:
-            if attention_mask.shape[-1] != kv_seq_len:
+            if attention_mask.shape[-1] > kv_seq_len:
                 attention_mask = attention_mask[..., -kv_seq_len:]
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+            expected_full = (bsz, 1, q_len, kv_seq_len)
+            expected_decode = (bsz, 1, q_len, 1)
+            if attention_mask.size() not in (expected_full, expected_decode):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    f"Attention mask should be of size {expected_full} or {expected_decode}, but is {attention_mask.size()}"
                 )
             attn_weights = attn_weights + attention_mask
 
