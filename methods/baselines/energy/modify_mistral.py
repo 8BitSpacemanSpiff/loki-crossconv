@@ -154,7 +154,7 @@ def get_energy_forward(args):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights
 
     return modified_forward
 
