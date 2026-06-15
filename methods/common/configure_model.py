@@ -15,6 +15,24 @@ def get_energy_args(parser):
                             help="fraction of tokens kept by the recent window")
     return parser
 
+def _add_arg_if_missing(parser, option, *args, **kwargs):
+    if not any(option in action.option_strings for action in parser._actions):
+        parser.add_argument(option, *args, **kwargs)
+
+def get_eviction_args(parser):
+    _add_arg_if_missing(parser, "--use-evict", action="store_true", default=False)
+    _add_arg_if_missing(parser, "--evict-method", type=str, default="value_residual",
+                        choices=["full", "snapkv", "h2o", "value_residual"])
+    _add_arg_if_missing(parser, "--evict-budget", type=float, default=512,
+                        help="<1 = fraction of prompt kept; >=1 = absolute token count")
+    _add_arg_if_missing(parser, "--obs-window", type=int, default=32,
+                        help="last N prompt tokens used as the query window")
+    _add_arg_if_missing(parser, "--sink-tokens", type=int, default=4)
+    _add_arg_if_missing(parser, "--recent-tokens", type=int, default=64)
+    _add_arg_if_missing(parser, "--pool-kernel", type=int, default=7)
+    _add_arg_if_missing(parser, "--cand-mult", type=int, default=3)
+    return parser
+
 def get_topk_args(parser):
     parser.add_argument("--use-topk", action='store_true', default=False, help="use the H2O algos")
     parser.add_argument("--top-k", type=float, default=-1, help="top k tokens to consider - >1 exact number, <1 fraction of tokens to consider," "set to -1 to use all tokens")
@@ -44,6 +62,9 @@ def get_modifier(args):
     elif args.use_energy_evict:
         method_name = "energy"
         module_name = ".baselines.energy.modify_" + args.model_type
+    elif getattr(args, "use_evict", False):
+        method_name = "eviction"
+        module_name = ".eviction.modify_" + args.model_type
     elif args.use_pca_topk:
         method_name = "pca_topk"
         module_name = ".pca_topk.modify_" + args.model_type
@@ -69,6 +90,13 @@ def get_config_dict(args):
         config_dict["method"] = "energy"
         config_dict["keep_ratio"] = args.keep_ratio
         config_dict["recent_ratio"] = args.recent_ratio if args.recent_ratio != -1 else args.keep_ratio
+    elif getattr(args, "use_evict", False):
+        config_dict["method"] = "eviction"
+        config_dict["evict_method"] = args.evict_method
+        config_dict["evict_budget"] = args.evict_budget
+        config_dict["sink_tokens"] = args.sink_tokens
+        config_dict["recent_tokens"] = args.recent_tokens
+        config_dict["obs_window"] = args.obs_window
     elif args.use_topk:
         config_dict["method"] = "topk"
         config_dict["top_k"] = args.top_k
