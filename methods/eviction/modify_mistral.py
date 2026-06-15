@@ -10,11 +10,12 @@ from transformers.models.mistral.modeling_mistral import MistralAttention, repea
 from .selectors import build_keep_mask
 
 
-_EVICT = {"masks": {}}
+_EVICT = {"masks": {}, "values": {}}
 
 
 def reset_evict():
     _EVICT["masks"].clear()
+    _EVICT["values"].clear()
 
 
 def _mistral_shape(self):
@@ -40,21 +41,6 @@ def _apply_rotary(query_states, key_states, cos, sin, position_ids):
         return apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
     except TypeError:
         return apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-
-def _recover_cached_values(past_key_value, layer_idx, fallback):
-    candidates = []
-    if hasattr(past_key_value, "value_cache"):
-        candidates.append(past_key_value.value_cache[layer_idx])
-    if hasattr(past_key_value, "layers"):
-        layer = past_key_value.layers[layer_idx]
-        for attr in ("values", "value_cache", "value_states", "v_cache"):
-            if hasattr(layer, attr):
-                candidates.append(getattr(layer, attr))
-    for candidate in candidates:
-        if torch.is_tensor(candidate):
-            return candidate
-    return fallback
 
 
 def get_eviction_forward(args):
@@ -100,11 +86,22 @@ def get_eviction_forward(args):
             if "cache_position" in kwargs:
                 cache_kwargs["cache_position"] = kwargs["cache_position"]
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-            if value_states.shape[-2] != key_states.shape[-2]:
-                value_states = _recover_cached_values(past_key_value, self.layer_idx, value_states)
 
         key_states = repeat_kv(key_states, num_key_value_groups)
         value_states = repeat_kv(value_states, num_key_value_groups)
+
+        if value_states.shape[-2] != key_states.shape[-2]:
+            prev_values = _EVICT["values"].get(self.layer_idx)
+            if prev_values is None:
+                raise RuntimeError(
+                    f"value cache unavailable for layer {self.layer_idx}: "
+                    f"key_len={key_states.shape[-2]} value_len={value_states.shape[-2]}"
+                )
+            if prev_values.shape[-2] < key_states.shape[-2]:
+                value_states = torch.cat([prev_values, value_states], dim=-2)
+            else:
+                value_states = prev_values[:, :, : key_states.shape[-2], :]
+        _EVICT["values"][self.layer_idx] = value_states.detach()
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
