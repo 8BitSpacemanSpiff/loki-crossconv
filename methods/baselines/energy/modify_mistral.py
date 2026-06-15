@@ -106,15 +106,16 @@ def get_energy_forward(args):
         recent_ratio = args.recent_ratio if args.recent_ratio != -1 else args.keep_ratio
         recent_budget = int(recent_ratio * L)
 
-        q = query_states.float()
-        Rq = torch.einsum("bhtd,bhte->bhde", q, q) / q.shape[2]
-        w, U = torch.linalg.eigh(Rq)
-        w = w.clamp_min(w.amax(-1, keepdim=True) * 1e-6)
-        Rq_half = (U * w.sqrt().unsqueeze(-2)) @ U.transpose(-1, -2)
+        with torch.cuda.amp.autocast(enabled=False):
+            q = query_states.float()
+            Rq = torch.einsum("bhtd,bhte->bhde", q, q) / q.shape[2]
+            w, U = torch.linalg.eigh(Rq)
+            w = w.clamp_min(w.amax(-1, keepdim=True) * 1e-6)
+            Rq_half = (U * w.sqrt().unsqueeze(-2)) @ U.transpose(-1, -2)
 
-        k = key_states.float()
-        kt = torch.einsum("bhld,bhde->bhle", k, Rq_half)
-        energy = (kt * kt).sum(-1)
+            k = key_states.float()
+            kt = torch.einsum("bhld,bhde->bhle", k, Rq_half)
+            energy = (kt * kt).sum(-1)
 
         neg = torch.finfo(attn_weights.dtype).min
         score = energy[:, :, None, :].expand(-1, -1, q_len, -1).clone()
