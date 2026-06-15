@@ -1,5 +1,6 @@
 from typing import Optional, Tuple
 import math
+import os
 import warnings
 
 import torch
@@ -163,7 +164,7 @@ def get_eviction_forward(args):
             else:
                 key_states = torch.cat([prev_keys, current_key_states], dim=-2)
                 value_states = torch.cat([prev_values, current_value_states], dim=-2)
-        if attention_mask is not None:
+        if attention_mask is not None and is_prefill:
             target_len = attention_mask.shape[-1]
             if key_states.shape[-2] > target_len:
                 key_states = key_states[:, :, :target_len, :]
@@ -180,6 +181,17 @@ def get_eviction_forward(args):
                 f"key_len={kv_seq_len} value_len={value_states.shape[-2]} "
                 f"cache_type={type(past_key_value).__name__ if past_key_value is not None else None}"
             )
+        if os.getenv("EVICT_DEBUG", "0") == "1" and self.layer_idx == 0:
+            print(
+                "[EVICT DEBUG]",
+                f"prefill={is_prefill}",
+                f"q_len={q_len}",
+                f"kv_len={kv_seq_len}",
+                f"key={tuple(key_states.shape)}",
+                f"value={tuple(value_states.shape)}",
+                f"mask={None if attention_mask is None else tuple(attention_mask.shape)}",
+                flush=True,
+            )
         _EVICT["keys"][self.layer_idx] = key_states.detach()
         _EVICT["values"][self.layer_idx] = value_states.detach()
 
@@ -192,6 +204,8 @@ def get_eviction_forward(args):
             )
 
         if attention_mask is not None:
+            if attention_mask.shape[-1] != kv_seq_len:
+                attention_mask = attention_mask[..., -kv_seq_len:]
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
