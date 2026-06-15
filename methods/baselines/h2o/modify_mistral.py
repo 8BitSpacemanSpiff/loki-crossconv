@@ -11,6 +11,19 @@ from functools import partial
 
 from .external.h2o_utils import local_heavy_hitter_mask
 
+def _mistral_shape(self):
+    num_heads = getattr(self, "num_heads", getattr(self, "num_attention_heads", self.config.num_attention_heads))
+    num_key_value_heads = getattr(self, "num_key_value_heads", self.config.num_key_value_heads)
+    num_key_value_groups = getattr(self, "num_key_value_groups", num_heads // num_key_value_heads)
+    hidden_size = getattr(self, "hidden_size", self.config.hidden_size)
+    return num_heads, num_key_value_heads, num_key_value_groups, hidden_size
+
+def _rotary_emb(self, value_states, kv_seq_len, position_ids):
+    try:
+        return self.rotary_emb(value_states, seq_len=kv_seq_len)
+    except TypeError:
+        return self.rotary_emb(value_states, position_ids)
+
 def get_h2o_forward(args):
     def modified_forward(
         self,
@@ -27,14 +40,15 @@ def get_h2o_forward(args):
                 "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
             )
         bsz, q_len, _ = hidden_states.size()
+        num_heads, num_key_value_heads, num_key_value_groups, hidden_size = _mistral_shape(self)
 
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, num_key_value_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -45,7 +59,7 @@ def get_h2o_forward(args):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        cos, sin = _rotary_emb(self, value_states, kv_seq_len, position_ids)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
@@ -53,14 +67,14 @@ def get_h2o_forward(args):
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        key_states = repeat_kv(key_states, num_key_value_groups)
+        value_states = repeat_kv(value_states, num_key_value_groups)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+        if attn_weights.size() != (bsz, num_heads, q_len, kv_seq_len):
             raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                f"Attention weights should be of size {(bsz, num_heads, q_len, kv_seq_len)}, but is"
                 f" {attn_weights.size()}"
             )
 
@@ -97,14 +111,14 @@ def get_h2o_forward(args):
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+        if attn_output.size() != (bsz, num_heads, q_len, self.head_dim):
             raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                f"`attn_output` should be of size {(bsz, num_heads, q_len, self.head_dim)}, but is"
                 f" {attn_output.size()}"
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        attn_output = attn_output.reshape(bsz, q_len, hidden_size)
 
         attn_output = self.o_proj(attn_output)
 
