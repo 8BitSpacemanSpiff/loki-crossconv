@@ -52,7 +52,7 @@ def run(args):
 
     results = {}
     for task in args.tasks:
-        ds = load_dataset("THUDM/LongBench", task, split="test")
+        ds = load_dataset("THUDM/LongBench", task, split="test", trust_remote_code=True)
         if args.limit:
             ds = ds.select(range(min(args.limit, len(ds))))
         scores = []
