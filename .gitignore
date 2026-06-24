@@ -1,3 +1,8 @@
+# spot-instance / rebuildable — never commit
+.venv/
+outputs/calib/
+outputs/calib_smoke/
+
 experiments/**
 outfiles/**
 text_generation/
