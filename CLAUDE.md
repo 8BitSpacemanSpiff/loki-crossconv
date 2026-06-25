@@ -110,6 +110,20 @@ confound, SimBin). Candidate real paper: "how each eviction method implicitly ha
 massive-activation tokens, and why that drives the whole ranking" — subsumes all three comparisons,
 sits in the outlier-dimension/quantization wheelhouse.
 
+## KVEvict persistent storage (ops — set up tomorrow, FIRST, to stop re-emitting)
+This box is a **Jarvislabs.ai** instance. The user created a persistent **Filesystem "KVEvict"**
+(survives pause/resume/destroy) — but it was NOT attached today, so the 49GB calib still dies on
+stop. Tomorrow:
+1. Launch/resume the instance **WITH KVEvict attached** (control-plane; user's action):
+   `jl create --gpu <type> --fs-id <KVEvict_id>` (CLI) or `Instance.create(..., fs_id=...)`. It
+   mounts at **`/home/jl_fs/`**. (No `jl` CLI was installed on the box; attach can't be done from
+   inside a running instance.)
+2. Once `/home/jl_fs/` exists: re-emit calib ONCE into it (or `mv outputs/calib /home/jl_fs/calib`
+   + symlink back), and stash the HF cache (`~/.cache/huggingface`) there too → future instances
+   that attach KVEvict skip BOTH the ~25-min emit and the 14GB model download.
+3. Update RUNBOOK so resume loads calib from `/home/jl_fs/calib` instead of re-emitting.
+Docs: https://docs.jarvislabs.ai/cli , https://docs.jarvislabs.ai/vm/
+
 ## What this project is
 Research track: **KV-cache eviction**. This is *separate* from the CrossCov-U sparse-attention
 selection paper — do not pull ideas, code, or framing across the two. If a task starts drifting
