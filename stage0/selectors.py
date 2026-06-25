@@ -29,51 +29,67 @@ import torch
 from .common import pairwise_sq_dist
 
 
-def diversity_order(K: torch.Tensor) -> torch.Tensor:
-    """Greedy farthest-point order over all keys. Returns a permutation (n,)."""
+def diversity_order(K: torch.Tensor, k: int | None = None) -> torch.Tensor:
+    """Greedy farthest-point order over all keys. Returns a permutation (n,).
+
+    k: if given, stop after k picks (the first-k prefix is identical to the full
+    order's prefix, so this only saves work -- the result is unchanged for budgets <= k).
+    """
     n = K.shape[0]
+    k = n if k is None else min(k, n)
     d2 = pairwise_sq_dist(K)
     start = int(d2.sum(1).argmin())          # medoid: deterministic seed
     order = [start]
     min_d = d2[start].clone()
     min_d[start] = -1.0
-    for _ in range(n - 1):
+    for _ in range(k - 1):
         nxt = int(min_d.argmax())
         order.append(nxt)
         min_d = torch.minimum(min_d, d2[nxt])
         min_d[nxt] = -1.0
-    return torch.tensor(order, dtype=torch.long)
+    return torch.tensor(order, dtype=torch.long, device=K.device)
 
 
 def _coverage_bandwidth(d2: torch.Tensor, percentile: float) -> torch.Tensor:
     n = d2.shape[0]
-    iu = torch.triu_indices(n, n, offset=1)
+    iu = torch.triu_indices(n, n, offset=1, device=d2.device)
     dist = d2[iu[0], iu[1]].sqrt()
+    # torch.quantile caps input at 2**24 elements; for large clouds the upper-triangle
+    # exceeds it. Subsample deterministically -- a quantile of pairwise distances is
+    # essentially unchanged by sampling millions of them. Exact for small clouds.
+    cap = 1 << 23
+    if dist.numel() > cap:
+        g = torch.Generator(device="cpu").manual_seed(0)
+        sel = torch.randperm(dist.numel(), generator=g)[:cap].to(dist.device)
+        dist = dist[sel]
     return torch.quantile(dist, percentile).clamp_min(1e-6)
 
 
-def coverage_order(K: torch.Tensor, bandwidth_pct: float = 0.10) -> torch.Tensor:
+def coverage_order(K: torch.Tensor, bandwidth_pct: float = 0.10,
+                   k: int | None = None) -> torch.Tensor:
     """Greedy facility-location order over all keys. Returns a permutation (n,).
 
     bandwidth_pct: percentile of pairwise distances used as the Gaussian kernel
     width. A FINE bandwidth makes the objective reward tiling dense regions, which
     is what pushes isolated needles to the END of the order under budget pressure.
+    k: if given, stop after k picks (prefix identical to the full order's prefix).
     """
     n = K.shape[0]
+    k = n if k is None else min(k, n)
     d2 = pairwise_sq_dist(K)
     bw = _coverage_bandwidth(d2, bandwidth_pct)
     sim = torch.exp(-d2 / (2.0 * bw * bw))   # (n, n) in (0, 1]
-    covered = torch.zeros(n, dtype=K.dtype)
-    avail = torch.ones(n, dtype=torch.bool)
+    covered = torch.zeros(n, dtype=K.dtype, device=K.device)
+    avail = torch.ones(n, dtype=torch.bool, device=K.device)
     order = []
-    for _ in range(n):
+    for _ in range(k):
         gain = torch.clamp(sim - covered[:, None], min=0.0).sum(0)
         gain[~avail] = -1.0
         u = int(gain.argmax())
         order.append(u)
         avail[u] = False
         covered = torch.maximum(covered, sim[:, u])
-    return torch.tensor(order, dtype=torch.long)
+    return torch.tensor(order, dtype=torch.long, device=K.device)
 
 
 # Alias: farthest-point sampling is k-CENTER (min-max coverage), a coverage
@@ -81,7 +97,8 @@ def coverage_order(K: torch.Tensor, bandwidth_pct: float = 0.10) -> torch.Tensor
 kcenter_order = diversity_order
 
 
-def logdet_order(K: torch.Tensor, eps_frac: float = 1e-3) -> torch.Tensor:
+def logdet_order(K: torch.Tensor, eps_frac: float = 1e-3,
+                 k: int | None = None) -> torch.Tensor:
     """Greedy log-det maximisation (k-DPP MAP) -- the TRUE diversity pole.
 
     Maximises log det(K_S K_S^T + eps I) greedily. Implemented via the d x d dual:
@@ -90,23 +107,25 @@ def logdet_order(K: torch.Tensor, eps_frac: float = 1e-3) -> torch.Tensor:
     This is well-defined for |S| > d (unlike the literal Gram volume, which
     saturates at rank d) and grabs distinctive/spanning directions, ignoring
     density. Returns a full pick order (n,).
+    k: if given, stop after k picks (prefix identical to the full order's prefix).
     """
     n, d = K.shape
+    kk = n if k is None else min(k, n)
     eps = eps_frac * float((K * K).sum(1).mean())   # scale-aware ridge
-    Minv = torch.eye(d, dtype=K.dtype) / eps
-    avail = torch.ones(n, dtype=torch.bool)
+    Minv = torch.eye(d, dtype=K.dtype, device=K.device) / eps
+    avail = torch.ones(n, dtype=torch.bool, device=K.device)
     order = []
-    for _ in range(n):
+    for _ in range(kk):
         lev = (K @ Minv * K).sum(1)              # k_i^T M^{-1} k_i
         gain = torch.log1p(lev)
         gain[~avail] = float("-inf")
         u = int(gain.argmax())
         order.append(u)
         avail[u] = False
-        k = K[u]
-        Mk = Minv @ k                            # Sherman-Morrison rank-1 update
-        Minv = Minv - torch.outer(Mk, Mk) / (1.0 + float(k @ Mk))
-    return torch.tensor(order, dtype=torch.long)
+        kv = K[u]
+        Mk = Minv @ kv                           # Sherman-Morrison rank-1 update
+        Minv = Minv - torch.outer(Mk, Mk) / (1.0 + float(kv @ Mk))
+    return torch.tensor(order, dtype=torch.long, device=K.device)
 
 
 def keydiff_order(K: torch.Tensor) -> torch.Tensor:
