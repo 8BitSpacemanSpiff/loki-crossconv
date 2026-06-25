@@ -22,8 +22,15 @@ pip install --upgrade pip
 pip install torch --index-url https://download.pytorch.org/whl/cu130   # match the box's CUDA
 pip install "transformers==4.44.2" "accelerate>=0.30" "datasets>=2.17" \
             "safetensors>=0.4.3" "huggingface-hub>=0.23" sentencepiece protobuf
+pip install "numpy<2" matplotlib                                       # see caveats below
 ```
 Sanity: `python -c "import torch,transformers,sentencepiece,protobuf; print(torch.cuda.is_available())"` → `True`.
+
+> **Caveats seen on a fresh A100 box (2026-06-25):** the prebuilt torch wheel needed **numpy<2**
+> (numpy 2.x crashed the import) and **sentencepiece** was missing. matplotlib is needed for the
+> Phase D plots. If the box's torch is **< 2.1.1**, transformers refuses `attn_implementation="sdpa"`;
+> `emit_calibration.py` / `validate_emit.py` therefore use **`eager`** — inert for what we capture
+> (K/Q/V come from pre-attention hooks; the artifact-tie was 0.00e+00).
 
 > ALWAYS run modules as `python -m stage0.X` from the repo root. Running `python stage0/x.py`
 > directly puts `stage0/` on `sys.path[0]`, so `stage0/selectors.py` shadows the stdlib `selectors`
@@ -54,10 +61,31 @@ python -m stage0.validate_emit                            # (b) expect: VERDICT:
 
 ## 6. Phase C — real-head routable-margin probe (CPU, ~90s)
 ```bash
-python -m stage0.phase_c             # -> outputs/phase_c_probe.md
+python -m stage0.phase_c             # -> outputs/phase_c_probe.md  (SUPERSEDED by Phase D, see below)
 ```
+
+## 6b. Resume checks (CPU, ~2 min) — logdet conditioning + kcenter/facility overlap
+```bash
+python -m stage0.resume_checks       # -> outputs/resume_checks.md
+```
+
+## 6c. Phase D — STEP 0 / 0b / STEP 1+2 (the per-head routing experiment)
+```bash
+# STEP 0  (CPU, ~1 min): is the rank-1 K_pre a shared sink offset? -> YES, centered rank ~9-27
+python -m stage0.step0_centered_rank          # -> outputs/phase_d_step0_centered_rank.md
+# STEP 0b (CPU, ~1 min): does the sink offset distort selection? -> only inner-product selectors
+python -m stage0.step0b_centering_ablation    # -> outputs/phase_d_step0b_centering_ablation.md
+# STEP 1+2 (GPU, ~2 h on A100): full 256-head measurement + geometry g_h. Per-layer checkpoint;
+#   re-running resumes from outputs/phase_d_raw.pt. facility is the cost (~3.7s/cloud, exact).
+python -m stage0.phase_d_step1 --n-seq 8      # -> outputs/phase_d_raw.pt  (452K, IS pushed)
+python -m stage0.phase_d_report               # -> measurement.md, geometry.md, perhead.csv, 3 PNGs
+```
+Smoke first if unsure: `python -m stage0.phase_d_step1 --smoke` (asserts batched==per-cloud selectors).
 
 ## 7. Resume the research
 Point Claude Code at the **RESUME block at the top of `CLAUDE.md`** — it carries the current state,
-the stale-spec warnings (logdet is dead on real heads; Phase D selector menu undecided), and the
-next decisions. Phase D has NOT been started and needs an explicit GO.
+the centering story, the settled menu/roles, and the **Phase D verdict**. Phase D STEP 1+2 is DONE;
+we are STOPPED at the Stage-2 (per-head routing AUC) gate. The data shows routing is budget-driven
+(not cleanly per-head) and the coverage menu loses to the deployable `keydiff_unc` baseline on ~88%
+of heads — so the next move (reframe / reckon-with-baseline / fit-AUC-at-10%) is a human decision,
+NOT an automatic GO.

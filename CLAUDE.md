@@ -1,36 +1,64 @@
 # CLAUDE.md — KV-Cache Eviction (Per-Head Objective Selection)
 
-## RESUME (read this FIRST on a cold instance — 2026-06-24)
+## RESUME (read this FIRST on a cold instance — 2026-06-25)
 
-State: Stage 0 + Phase A + Phase B + Phase C are **done and committed**. The 49GB calibration
-artifact was emitted, validated against the model (fp16-faithful), and probed — **but it is GONE**:
-it lived only on a spot instance and was NOT pushed (too large). Code, results `.md`, and decisions
-ARE pushed. See `RUNBOOK.md` for exact rebuild commands.
+State: Stage 0 + Phase A/B/C + resume-checks + **Phase D (STEP 0, 0b, STEP 1+2)** are done and
+committed. We are **STOPPED at the Stage-2 gate** (the per-head routing AUC fit) awaiting a GO or a
+reframe decision — see "Phase D verdict" below. The 49GB calibration artifact is **GONE** (spot
+instance, never pushed — too large); re-emit it first. Everything else (code, results `.md`/`.csv`/
+`.png`, the small `outputs/phase_d_raw.pt` (452K), decisions) IS pushed.
 
-**FIRST STEP on resume — re-emit the artifact, then re-validate before trusting anything:**
+**FIRST STEP on resume — re-emit the artifact, then re-validate before trusting any Δ:**
 1. `python -m stage0.emit_calibration --seq-len 8192 --n-seq 32 --out-dir outputs/calib`
-   (~25 min on the GPU including the ~14GB model download; c4, seq_len 8192, 32 seqs → ~49GB).
-2. Resume check (a) — contract: `python -m stage0.verify_calibration --dir outputs/calib`
-   must print `CONTRACT OK across 32 layers` (RoPE applied, disjoint oracle/eval, attention peaked).
-3. Resume check (b) — model faithfulness: `python -m stage0.validate_emit`
-   must print `VERDICT: PASS` (recon-vs-true weights/outputs ~fp16, artifact-tie ≈ 0).
-   Do NOT trust any Phase C/D Δ or oracle label until BOTH (a) and (b) pass on the re-emitted data.
+   (~3 min on a warm model cache, ~25 min cold incl. the ~14GB download; c4, 8192, 32 seqs → ~49GB).
+2. Contract: `python -m stage0.verify_calibration --dir outputs/calib` → `CONTRACT OK across 32 layers`.
+3. Faithfulness: `python -m stage0.validate_emit` → `VERDICT: PASS` (weights/outputs ~fp16,
+   artifact-tie ≈ 0). Do NOT trust any Phase C/D Δ or oracle label until 2 AND 3 pass.
 
-**STALE-SPEC WARNING — do not follow these blindly:**
-- The spec/hard-rules below reference a repo `--emit-rq` forward pass. **It does not exist** in this
-  checkout; emit was built from scratch (`stage0/emit_calibration.py`). Ignore `--emit-rq`.
-- The Phase A *synthetic* selector recommendation is **STALE/WRONG for real data**. On real Mistral
-  heads (Phase C, `outputs/phase_c_probe.md`): **logdet is DEAD** — it won 0/39 heads; the
-  volume-diversity story does NOT transfer. keydiff (also the Stage 3 baseline) was strongest
-  (17/39), facility/coverage is sound and wins 15/39, kcenter 7/39.
-- **Routability = YES** (38/39 heads separate beyond noise) — NOT the synthetic NO-GO.
-- **Phase D selector menu is UNDECIDED.** Candidates: `keydiff` + `facility` + `kcenter`; drop
-  `logdet`. Phase D also needs fuller averaging (more seqs, larger N) + per-head geometry `g_h`.
-- Hardware is actually an **H200 (143GB)**, not the H100 named below. Model is
-  `mistral-community/Mistral-7B-v0.2` (ungated; mistralai never published a base v0.2 repo).
-- Env: a `.venv/` (torch 2.12+cu130, transformers 4.44.2, sentencepiece, protobuf) — gitignored,
-  rebuild per `RUNBOOK.md`. Always run modules as `python -m stage0.X` from the repo root (a bare
-  `python stage0/x.py` shadows stdlib `selectors` with `stage0/selectors.py`).
+**ENV / HARDWARE (this session was an A100-80GB, NOT the H100/H200 named below):**
+- `.venv/` is gitignored; rebuild per `RUNBOOK.md`. This box had **torch 2.1.0+cu121,
+  transformers 4.40.2**, needs **numpy<2** + sentencepiece. Because torch<2.1.1, emit + validate
+  use **`attn_implementation="eager"`** (not sdpa) — provably inert (captured K/Q/V come from
+  pre-attention hooks; artifact-tie was 0.00e+00). Always run as `python -m stage0.X` from repo root
+  (a bare `python stage0/x.py` shadows stdlib `selectors` with `stage0/selectors.py`).
+- Model `mistral-community/Mistral-7B-v0.2` (ungated; mistralai never published a base v0.2 repo).
+
+**CENTERING IS THE STAGE-0 STORY (supersedes the old "rank-1 / no volume" framing):**
+- The apparent rank-1 K_pre (eff-rank ~1.4) was a **shared mean / attention-sink DC offset**, NOT
+  intrinsic. Centered rank is ~9–27 (layer 0 is the only genuine near-rank-1). The "logdet dies
+  because there's no volume to maximize" mechanism is **DEAD** (`phase_d_step0_centered_rank.md`).
+- Euclidean coverage selectors (`facility`, `kcenter`) are **translation-invariant** → centered ==
+  uncentered; their wins are real. Only the inner-product selectors move under de-meaning: uncentered
+  `keydiff` rode the sink (collapses 17→2 wins when centered), `logdet` was buried by it (recovers
+  0→5). See `phase_d_step0b_centering_ablation.md`.
+
+**MENU / ROLES (settled in STEP 0b; do not re-litigate):**
+- Routing label (Stage-2 target) = `argmin{facility, kcenter}` on de-meaned content geometry.
+- `keydiff_unc` (raw keys) = the deployable **BASELINE to beat**, reported as a column, not routed.
+- `keydiff_cen` + `logdet_cen` = **reference columns** (document the sink-collapse / diversity-stays-
+  weak), not routing candidates. `logdet` is **dropped** as a candidate.
+
+**PHASE D VERDICT (full 256-head measurement; `phase_d_step1_measurement.md`, `..._step2_geometry.md`,
+`phase_d_perhead.csv`, 3 PNGs) — the data does NOT cleanly support per-head geometry routing:**
+- Routing is **budget-driven**, not per-head: @3% kcenter 232 / facility 23 (kcenter 91%);
+  crossover to facility as budget grows (10%: 113/140; 25%: 161/90; 50%: 163/89).
+- No budget has both balanced classes AND stable labels: @3% stable (22/255 flip) but DEGENERATE
+  (always-kcenter ≈ 91%); @10% classes balance but UNSTABLE (83/253 flip across the held-out split).
+- **Baseline dominates:** routed `min{fac,kc}` beats `keydiff_unc` on only 30/255 heads @3%
+  (8/252 @50%) — coverage loses to deployable KeyDiff on ~88% of heads.
+- `g_h` (PR, spectral_tail, outlier_fraction, clusteredness on centered K_pre) separate the winner
+  classes only weakly / overlapping on a 23-vs-232 imbalance. No clean boundary in the scatter PNGs.
+- **Open decision for the human (do NOT start Stage 2 without it):** (a) reframe to the budget-
+  dependent kcenter→facility crossover (what the data supports); (b) reckon with KeyDiff beating the
+  coverage menu on 88% of heads; or (c) fit the AUC only at 10% (the one balanced budget) while
+  owning the 33% label instability.
+
+**STALE-SPEC WARNING — older notes below are superseded by the above:**
+- The spec/hard-rules reference a repo `--emit-rq` forward pass. **It does not exist**; emit was
+  built from scratch (`stage0/emit_calibration.py`). Ignore `--emit-rq`.
+- Phase A *synthetic* selector rankings are STALE for real data (see CENTERING + VERDICT above).
+- Phase C (`phase_c_probe.md`, uncentered keydiff 17 / facility 15 / kcenter 7, logdet 0) is
+  **superseded** by Phase D STEP 0b/STEP 1: the uncentered keydiff strength was the sink artifact.
 
 ## What this project is
 Research track: **KV-cache eviction**. This is *separate* from the CrossCov-U sparse-attention
