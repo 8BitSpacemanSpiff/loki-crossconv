@@ -88,8 +88,12 @@ def main():
     t0 = time.time()
     dev = "cuda"
     tok = AutoTokenizer.from_pretrained(MODEL_ID)
+    # eager (not sdpa): this box's torch is 2.1.0 and transformers gates sdpa behind
+    # torch>=2.1.1. The captured tensors (K_pre/K_post/V/Q_post) come from the rope/v_proj
+    # hooks that fire BEFORE the attention kernel, so they are bit-identical regardless of
+    # attn_implementation; only downstream attention output differs, at fp16 noise.
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, torch_dtype=torch.float16, attn_implementation="sdpa"
+        MODEL_ID, torch_dtype=torch.float16, attn_implementation="eager"
     ).to(dev).eval()
     cfg = model.config
     n_layers = cfg.num_hidden_layers

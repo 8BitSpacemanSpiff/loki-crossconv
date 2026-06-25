@@ -94,15 +94,16 @@ def part1_mechanism(tok):
 
 
 def part2_artifact_tie(tok):
-    print("\n== Part 2: artifact tie (sdpa, seq=8192, reproduce saved seq 0) ==")
+    print("\n== Part 2: artifact tie (eager, seq=8192, reproduce saved seq 0) ==")
     if not (CALIB / "layer_00.pt").exists():
         print("  (no saved artifact found, skipping)")
         return 0.0
     import json
     meta = json.loads((CALIB / "meta.json").read_text())
     seq_len, P = meta["seq_len"], meta["cloud_len_P"]
+    # eager to match emit (torch<2.1.1 here); captured tensors are attn-impl-independent.
     model = AutoModelForCausalLM.from_pretrained(
-        E.MODEL_ID, torch_dtype=torch.float16, attn_implementation="sdpa").to("cuda").eval()
+        E.MODEL_ID, torch_dtype=torch.float16, attn_implementation="eager").to("cuda").eval()
     cfg = model.config
     n_kv, n_heads = cfg.num_key_value_heads, cfg.num_attention_heads
     hd = cfg.hidden_size // n_heads
