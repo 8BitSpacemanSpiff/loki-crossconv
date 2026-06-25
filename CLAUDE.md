@@ -83,6 +83,33 @@ clean look once the content-Δ fork is resolved.
 - Phase C (`phase_c_probe.md`, uncentered keydiff 17 / facility 15 / kcenter 7, logdet 0) is
   **superseded** by Phase D STEP 0b/STEP 1: the uncentered keydiff strength was the sink artifact.
 
+## SimBin > KeyDiff — tomorrow's second thread (do AFTER content-excluded Δ)
+
+Hypothesis: sinks/massive-activation tokens explain why SimBin beats KeyDiff — but via MODES, not
+buckets. Corrected mechanism:
+- KeyDiff already KEEPS sinks (3.02/4) and won 75% partly because of it — so sink-retention is
+  common to both and can't be SimBin's edge. SimBin's advantage must live in CONTENT tokens.
+- "One leader per bucket" is wrong (too few outliers for that; massive-activation tokens share
+  fixed-dim sign patterns so they collapse INTO a few buckets, not one-per-bucket). Right framing:
+  KeyDiff's single GLOBAL mean anchor mis-ranks multimodal key clouds; SimBin keeps one rep per
+  MODE. Sinks are the sharpest mode the anchor mishandles, not the whole story.
+
+PREMISE-CHECK FIRST (don't theorize on a confounded delta): the SimBin>KeyDiff result may have been
+measured on relL2 (flagged unreliable) or sink-mass Δ. Re-establish SimBin > KeyDiff under
+sink-protection + content-excluded Δ BEFORE explaining it.
+
+Two-part test on the re-emitted artifact (nearly free once massive-activation capture lands):
+  (a) Are SimBin's retained tokens MORE enriched for sink/massive-activation tokens than KeyDiff's?
+  (b) On content-excluded Δ, does SimBin still beat KeyDiff, and is it via better per-mode content
+      coverage (not sink enrichment)?
+  survives content-exclusion & not just sink enrichment -> multimodal-coverage story is right.
+  edge IS the sink enrichment -> original sink intuition wins, KeyDiff's sink-keeping worse than it looks.
+
+META: sinks/massive-activations are now load-bearing in THREE places (KeyDiff's win, the metric
+confound, SimBin). Candidate real paper: "how each eviction method implicitly handles
+massive-activation tokens, and why that drives the whole ranking" — subsumes all three comparisons,
+sits in the outlier-dimension/quantization wheelhouse.
+
 ## What this project is
 Research track: **KV-cache eviction**. This is *separate* from the CrossCov-U sparse-attention
 selection paper — do not pull ideas, code, or framing across the two. If a task starts drifting
