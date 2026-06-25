@@ -79,13 +79,26 @@ python -m stage0.step0b_centering_ablation    # -> outputs/phase_d_step0b_center
 #   re-running resumes from outputs/phase_d_raw.pt. facility is the cost (~3.7s/cloud, exact).
 python -m stage0.phase_d_step1 --n-seq 8      # -> outputs/phase_d_raw.pt  (452K, IS pushed)
 python -m stage0.phase_d_report               # -> measurement.md, geometry.md, perhead.csv, 3 PNGs
+# SINK ABLATION (GPU, ~1 h): protect pos 0-3 for all selectors @3%/@25%. DONE.
+python -m stage0.phase_d_sink_ablation --n-seq 8   # -> phase_d_sink_ablation.md, phase_d_sink_raw.pt
 ```
 Smoke first if unsure: `python -m stage0.phase_d_step1 --smoke` (asserts batched==per-cloud selectors).
 
+## 6d. TOMORROW (in order) — massive activations + the content-excluded Δ fork
+The per-head ROUTING experiment is DEAD (Phase D + sink ablation). The live axis is
+distinctiveness vs coverage, and it hinges on ONE check. Sequence:
+1. **Re-emit WITH massive-activation capture folded in** (~25 min H100/A100). Implement per
+   `outputs/phase_d_emit_addition_massive_activations.md` (residual top-8 + per-dim max-abs), then
+   `emit_calibration` → `verify_calibration` → `validate_emit` (must PASS). **Artifact is NOT saved
+   (spot) — re-emit first.**
+2. **Content-excluded Δ (CPU)** — the decisive fork: `keydiff_unc` vs routed `min{facility,kcenter}`
+   (all sink-protected), Δ renormalized over NON-sink positions (drop 0-3 from softmax denominator
+   AND output sum), @3% and @25%, broken out by layer band **L0-1 / L2-14 / L15+**. Holds → reframe
+   toward distinctiveness is earned; drops to parity → gap was sink bookkeeping, fold eviction.
+3. **Three-way mechanism check** (massive-activation dims ↔ sink positions ↔ retaining selector).
+
 ## 7. Resume the research
-Point Claude Code at the **RESUME block at the top of `CLAUDE.md`** — it carries the current state,
-the centering story, the settled menu/roles, and the **Phase D verdict**. Phase D STEP 1+2 is DONE;
-we are STOPPED at the Stage-2 (per-head routing AUC) gate. The data shows routing is budget-driven
-(not cleanly per-head) and the coverage menu loses to the deployable `keydiff_unc` baseline on ~88%
-of heads — so the next move (reframe / reckon-with-baseline / fit-AUC-at-10%) is a human decision,
-NOT an automatic GO.
+Point Claude Code at the **RESUME block at the top of `CLAUDE.md`** — current state, the centering
+story, the settled roles, the Phase D + sink-ablation verdicts, and the CRITICAL OPEN ITEM
+(content-excluded Δ). Routing is dead; do step 6d FIRST. Rule: every selector comparison MUST
+sink-protect all selectors or facility is handicapped.

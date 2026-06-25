@@ -2,18 +2,24 @@
 
 ## RESUME (read this FIRST on a cold instance — 2026-06-25)
 
-State: Stage 0 + Phase A/B/C + resume-checks + **Phase D (STEP 0, 0b, STEP 1+2)** are done and
-committed. We are **STOPPED at the Stage-2 gate** (the per-head routing AUC fit) awaiting a GO or a
-reframe decision — see "Phase D verdict" below. The 49GB calibration artifact is **GONE** (spot
-instance, never pushed — too large); re-emit it first. Everything else (code, results `.md`/`.csv`/
-`.png`, the small `outputs/phase_d_raw.pt` (452K), decisions) IS pushed.
+State: Stage 0 + Phase A/B/C + resume-checks + **Phase D (STEP 0, 0b, STEP 1+2) + sink ablation**
+are done and committed. **Routing-as-a-coverage-axis is DEAD** (per-head geometry routing failed;
+sink ablation confirmed coverage is not competitive even sink-protected — see verdict below). The
+live axis is **distinctiveness (keydiff) vs coverage**, pending ONE decisive check tomorrow:
+**content-excluded Δ** (see CRITICAL OPEN ITEM). We are NOT at the Stage-2 AUC gate anymore — that
+fork is closed. The 49GB calibration artifact is **GONE** (spot instance, never pushed); re-emit
+first, and tomorrow re-emit it **WITH the massive-activation capture folded in**
+(`phase_d_emit_addition_massive_activations.md`). Everything else (code, results, `phase_d_raw.pt`
+452K, `phase_d_sink_raw.pt`, decisions) IS pushed.
 
-**FIRST STEP on resume — re-emit the artifact, then re-validate before trusting any Δ:**
+**FIRST STEP on resume — re-emit (with the MA addition tomorrow), then re-validate before any Δ:**
 1. `python -m stage0.emit_calibration --seq-len 8192 --n-seq 32 --out-dir outputs/calib`
-   (~3 min on a warm model cache, ~25 min cold incl. the ~14GB download; c4, 8192, 32 seqs → ~49GB).
+   (~3 min warm cache, ~25 min cold incl. ~14GB download; c4, 8192, 32 seqs → ~49GB).
+   **TOMORROW: first fold in massive-activation capture** (residual top-8 + per-dim max-abs) per
+   `phase_d_emit_addition_massive_activations.md`, then re-emit.
 2. Contract: `python -m stage0.verify_calibration --dir outputs/calib` → `CONTRACT OK across 32 layers`.
 3. Faithfulness: `python -m stage0.validate_emit` → `VERDICT: PASS` (weights/outputs ~fp16,
-   artifact-tie ≈ 0). Do NOT trust any Phase C/D Δ or oracle label until 2 AND 3 pass.
+   artifact-tie ≈ 0). Do NOT trust any Δ or oracle label until 2 AND 3 pass.
 
 **ENV / HARDWARE (this session was an A100-80GB, NOT the H100/H200 named below):**
 - `.venv/` is gitignored; rebuild per `RUNBOOK.md`. This box had **torch 2.1.0+cu121,
@@ -32,28 +38,45 @@ instance, never pushed — too large); re-emit it first. Everything else (code, 
   `keydiff` rode the sink (collapses 17→2 wins when centered), `logdet` was buried by it (recovers
   0→5). See `phase_d_step0b_centering_ablation.md`.
 
-**MENU / ROLES (settled in STEP 0b; do not re-litigate):**
-- Routing label (Stage-2 target) = `argmin{facility, kcenter}` on de-meaned content geometry.
-- `keydiff_unc` (raw keys) = the deployable **BASELINE to beat**, reported as a column, not routed.
-- `keydiff_cen` + `logdet_cen` = **reference columns** (document the sink-collapse / diversity-stays-
-  weak), not routing candidates. `logdet` is **dropped** as a candidate.
+**MENU / ROLES (settled in STEP 0b):**
+- `keydiff_unc` (raw keys) = the deployable **BASELINE to beat**.
+- coverage menu = `facility`, `kcenter` (offset-invariant). `logdet` **dropped**; `keydiff_cen` +
+  `logdet_cen` are reference columns. RULE GOING FORWARD: **every selector comparison MUST
+  sink-protect ALL selectors** (always-keep pos 0-3) or facility is handicapped (it evicts sinks).
 
-**PHASE D VERDICT (full 256-head measurement; `phase_d_step1_measurement.md`, `..._step2_geometry.md`,
-`phase_d_perhead.csv`, 3 PNGs) — the data does NOT cleanly support per-head geometry routing:**
-- Routing is **budget-driven**, not per-head: @3% kcenter 232 / facility 23 (kcenter 91%);
-  crossover to facility as budget grows (10%: 113/140; 25%: 161/90; 50%: 163/89).
-- No budget has both balanced classes AND stable labels: @3% stable (22/255 flip) but DEGENERATE
-  (always-kcenter ≈ 91%); @10% classes balance but UNSTABLE (83/253 flip across the held-out split).
-- **Baseline dominates:** routed `min{fac,kc}` beats `keydiff_unc` on only 30/255 heads @3%
-  (8/252 @50%) — coverage loses to deployable KeyDiff on ~88% of heads.
-- `g_h` (PR, spectral_tail, outlier_fraction, clusteredness on centered K_pre) separate the winner
-  classes only weakly / overlapping on a 23-vs-232 imbalance. No clean boundary in the scatter PNGs.
-- **Open decision for the human (do NOT start Stage 2 without it):** (a) reframe to the budget-
-  dependent kcenter→facility crossover (what the data supports); (b) reckon with KeyDiff beating the
-  coverage menu on 88% of heads; or (c) fit the AUC only at 10% (the one balanced budget) while
-  owning the 33% label instability.
+**PHASE D VERDICT — per-head geometry routing FAILED (`phase_d_step1_measurement.md`, `..._step2_geometry.md`,
+`phase_d_perhead.csv`, 3 PNGs):**
+- Routing is budget-driven not per-head: @3% kcenter 232 / facility 23; crossover to facility as
+  budget grows (10%: 113/140; 25%: 161/90; 50%: 163/89). No budget is both balanced AND stable
+  (@3% stable but degenerate ~91% kcenter; @10% balanced but 33% split-flip). `g_h` barely separates
+  winner classes. Coverage routing is not a viable axis.
+
+**SINK ABLATION VERDICT — DONE, 256 heads (`phase_d_sink_ablation.md`, `phase_d_sink_raw.pt`):**
+- Protecting pos 0-3 equally: coverage beats `keydiff_unc` @3% only 35/256 (14%) → 64/256 (25%)
+  sink-protected (@25%: 30→36). Sink-protection ~DOUBLES facility's wins but **KeyDiff still beats
+  the coverage menu on 192/256 (75%) sink-protected** → routing-as-coverage-axis is DEAD; coverage
+  is not competitive even after the sink fix.
+- Mechanism (KeyDiff-win heads): mean **sink_mass ~0.54** (eval attn on pos 0-3); KeyDiff parks
+  **~0.68** of retained mass on sinks; sinks kept of 4 = **kd ~3.0 / fac ~0.3 / kc ~1.4** (facility
+  throws away the high-mass sinks). KeyDiff's edge is **sink-AUGMENTED, not sink-DEPENDENT**.
+
+**>>> CRITICAL OPEN ITEM — DO THIS FIRST TOMORROW (before any reframe is "earned"): <<<**
+The 75% is on **FULL Δ**, which still rewards the free sink mass BOTH methods keep. Re-run
+`keydiff_unc` vs routed `min{facility,kcenter}` on **CONTENT-EXCLUDED Δ**: softmax renormalized over
+NON-sink positions only (drop 0-3 from BOTH the softmax denominator AND the output sum), @3% and
+@25%, **broken out by layer band L0-1 / L2-14 / L15+**. This is THE fork:
+- gap HOLDS on content-excluded Δ → "reframe toward distinctiveness" is earned (real, not bookkeeping).
+- gap DROPS to parity → the 75% was sink bookkeeping → fold eviction back in; distinctiveness story dies.
+(All selectors still sink-protected. Δ stays on real uncentered K_post/V.)
+
+**SECOND OPEN ITEM (possibly the most publishable):** the @25% norm reversal under sink-protection —
+facility 165→93, kcenter 91→163. Unexplained budget × coverage-normalization interaction; needs a
+clean look once the content-Δ fork is resolved.
 
 **STALE-SPEC WARNING — older notes below are superseded by the above:**
+- The whole `perhead_objective_selection_spec.md` per-head ROUTING premise is **DEAD**: logdet dead
+  (Phase C), routing dead (Phase D + sink ablation). The only LIVE axis is **distinctiveness
+  (keydiff) vs coverage**, and even that is provisional pending the content-excluded Δ check.
 - The spec/hard-rules reference a repo `--emit-rq` forward pass. **It does not exist**; emit was
   built from scratch (`stage0/emit_calibration.py`). Ignore `--emit-rq`.
 - Phase A *synthetic* selector rankings are STALE for real data (see CENTERING + VERDICT above).
